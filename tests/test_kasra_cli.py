@@ -159,6 +159,84 @@ def test_kasra_submit_without_confirm_prints_payloads_and_writes_nothing(tmp_pat
     assert 'dry_run' in out
 
 
+def approval_code_for(plan_path):
+    """The code a user must read from the dry run and type back to approve the write."""
+    from attendance_sync.cli import approval_code
+    plan = json.loads(plan_path.read_text(encoding='utf-8'))
+    return approval_code(plan['payloads'])
+
+
+def approve_args(plan_path, include_review=False):
+    """Flags that approve exactly the payloads a dry run would submit."""
+    from attendance_sync.cli import approval_code
+    plan = json.loads(plan_path.read_text(encoding='utf-8'))
+    selected = [row for row in plan['payloads'] if include_review or not row.get('requires_review')]
+    return ['--confirm', '--approve', approval_code(selected)]
+
+
+def test_dry_run_prints_the_approval_code_the_user_must_type(tmp_path, capsys):
+    from attendance_sync.cli import main
+    plan_path = tmp_path / 'private' / 'kasra-plan.json'
+    main(['kasra-plan', '--review', str(review_file(tmp_path)), '--start', '1405/06/01',
+          '--end', '1405/06/21', '--output', str(plan_path)], kasra=FakeKasra())
+    assert main(['kasra-submit', '--plan', str(plan_path)], kasra=FakeKasra()) == 0
+    printed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert printed['approval_code'] == approval_code_for(plan_path)
+    assert printed['written'] == 0
+
+
+def test_confirmed_write_requires_the_matching_approval_code(tmp_path):
+    from attendance_sync.cli import main
+    plan_path = tmp_path / 'private' / 'kasra-plan.json'
+    main(['kasra-plan', '--review', str(review_file(tmp_path)), '--start', '1405/06/01',
+          '--end', '1405/06/21', '--output', str(plan_path)], kasra=FakeKasra())
+    code = approval_code_for(plan_path)
+    created = tmp_path / 'private' / 'kasra-created.json'
+    for bad in (None, 'deadbeef', code.upper()[:4]):
+        client = FakeKasra()
+        args = ['kasra-submit', '--plan', str(plan_path), '--confirm', '--created-docs', str(created)]
+        if bad is not None:
+            args += ['--approve', bad]
+        assert main(args, kasra=client) == 2
+        assert client.written == []
+    client = FakeKasra()
+    assert main(['kasra-submit', '--plan', str(plan_path), '--confirm', '--approve', code,
+                 '--created-docs', str(created)], kasra=client) == 0
+    assert [confirm for _, confirm in client.written] == [True]
+
+
+def test_an_approval_code_stops_being_valid_when_the_plan_changes(tmp_path):
+    from attendance_sync.cli import main
+    plan_path = tmp_path / 'private' / 'kasra-plan.json'
+    main(['kasra-plan', '--review', str(review_file(tmp_path)), '--start', '1405/06/01',
+          '--end', '1405/06/21', '--output', str(plan_path)], kasra=FakeKasra())
+    code = approval_code_for(plan_path)
+    plan = json.loads(plan_path.read_text(encoding='utf-8'))
+    plan['payloads'][0]['minutes'] = 999
+    plan_path.write_text(json.dumps(plan), encoding='utf-8')
+    client = FakeKasra()
+    assert main(['kasra-submit', '--plan', str(plan_path), '--confirm', '--approve', code],
+                kasra=client) == 2
+    assert client.written == []
+
+
+def test_deleting_a_document_also_requires_its_own_approval_code(tmp_path, capsys):
+    from attendance_sync.cli import main
+    plan_path = tmp_path / 'plan.json'
+    plan_path.write_text(json.dumps({'payloads': []}), encoding='utf-8')
+    client = FakeKasra()
+    assert main(['kasra-submit', '--plan', str(plan_path), '--delete-doc-id', '900002'],
+                kasra=client) == 0
+    printed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert client.calls == []
+    assert main(['kasra-submit', '--plan', str(plan_path), '--delete-doc-id', '900002',
+                 '--confirm', '--approve', 'wrong'], kasra=client) == 2
+    assert 'delete_document' not in client.calls
+    assert main(['kasra-submit', '--plan', str(plan_path), '--delete-doc-id', '900002',
+                 '--confirm', '--approve', printed['approval_code']], kasra=client) == 0
+    assert 'delete_document' in client.calls
+
+
 def test_kasra_submit_confirm_calls_the_writer_and_records_the_document_id(tmp_path, capsys):
     from attendance_sync.cli import main
     plan_path = tmp_path / 'private' / 'kasra-plan.json'
@@ -166,8 +244,8 @@ def test_kasra_submit_confirm_calls_the_writer_and_records_the_document_id(tmp_p
     main(['kasra-plan', '--review', str(review_file(tmp_path)), '--start', '1405/06/01',
           '--end', '1405/06/21', '--output', str(plan_path)], kasra=FakeKasra())
     client = FakeKasra()
-    assert main(['kasra-submit', '--plan', str(plan_path), '--confirm',
-                 '--created-docs', str(created_path)], kasra=client) == 0
+    assert main(['kasra-submit', '--plan', str(plan_path)] + approve_args(plan_path) +
+                ['--created-docs', str(created_path)], kasra=client) == 0
     assert [confirm for _, confirm in client.written] == [True]
     payload, _ = client.written[0]
     assert (payload['credit_type'], payload['start_time'], payload['end_time'], payload['minutes']) == \
@@ -189,11 +267,11 @@ def test_kasra_submit_skips_midnight_payloads_unless_asked(tmp_path):
     plan_path.write_text(json.dumps(plan), encoding='utf-8')
     client = FakeKasra()
     created = tmp_path / 'kasra-created.json'
-    assert main(['kasra-submit', '--plan', str(plan_path), '--confirm',
-                 '--created-docs', str(created)], kasra=client) == 0
+    assert main(['kasra-submit', '--plan', str(plan_path)] + approve_args(plan_path) +
+                ['--created-docs', str(created)], kasra=client) == 0
     assert client.written == []
-    assert main(['kasra-submit', '--plan', str(plan_path), '--confirm', '--include-review',
-                 '--created-docs', str(created)], kasra=client) == 0
+    assert main(['kasra-submit', '--plan', str(plan_path)] + approve_args(plan_path, include_review=True) +
+                ['--include-review', '--created-docs', str(created)], kasra=client) == 0
     assert [confirm for _, confirm in client.written] == [True]
 
 
@@ -204,8 +282,10 @@ def test_kasra_submit_deletes_only_the_named_document_id(tmp_path, capsys):
     client = FakeKasra()
     assert main(['kasra-submit', '--plan', str(plan_path), '--delete-doc-id', '900002'], kasra=client) == 0
     assert client.calls == [] and '900002' in capsys.readouterr().out
-    assert main(['kasra-submit', '--plan', str(plan_path), '--delete-doc-id', '900002', '--confirm'],
-                kasra=client) == 0
+    from attendance_sync.cli import approval_code
+    code = approval_code({'delete_doc_id': '900002'})
+    assert main(['kasra-submit', '--plan', str(plan_path), '--delete-doc-id', '900002',
+                 '--confirm', '--approve', code], kasra=client) == 0
     assert 'delete_document' in client.calls
 
 
@@ -274,8 +354,8 @@ def test_confirmed_submit_that_cannot_be_read_back_is_reported_as_failure(tmp_pa
     from attendance_sync.cli import main
     plan_path = two_payload_plan(tmp_path / 'plan.json')
     created_path = tmp_path / 'private' / 'kasra-created.json'
-    code = main(['kasra-submit', '--plan', str(plan_path), '--confirm',
-                 '--created-docs', str(created_path)], kasra=SilentKasra())
+    code = main(['kasra-submit', '--plan', str(plan_path)] + approve_args(plan_path) +
+                ['--created-docs', str(created_path)], kasra=SilentKasra())
     captured = capsys.readouterr()
     assert code != 0, 'a save that could not be read back must not report success'
     assert '"written": 0' in captured.out or '"written": 0' in captured.err
@@ -287,8 +367,8 @@ def test_created_records_are_flushed_before_a_later_write_fails(tmp_path, capsys
     from attendance_sync.cli import main
     plan_path = two_payload_plan(tmp_path / 'plan.json')
     created_path = tmp_path / 'private' / 'kasra-created.json'
-    code = main(['kasra-submit', '--plan', str(plan_path), '--confirm',
-                 '--created-docs', str(created_path)], kasra=FailingSecondWrite())
+    code = main(['kasra-submit', '--plan', str(plan_path)] + approve_args(plan_path) +
+                ['--created-docs', str(created_path)], kasra=FailingSecondWrite())
     assert code != 0
     record = json.loads(created_path.read_text(encoding='utf-8'))
     assert len(record['documents']) == 1
@@ -301,8 +381,8 @@ def test_created_docs_path_is_validated_before_any_write(tmp_path, monkeypatch, 
     monkeypatch.chdir(tmp_path)
     plan_path = two_payload_plan(tmp_path / 'plan.json')
     client = FakeKasra()
-    code = main(['kasra-submit', '--plan', str(plan_path), '--confirm',
-                 '--created-docs', 'kasra-created.json'], kasra=client)
+    code = main(['kasra-submit', '--plan', str(plan_path)] + approve_args(plan_path) +
+                ['--created-docs', 'kasra-created.json'], kasra=client)
     assert code == 2
     assert client.written == []
     assert 'Invalid' in capsys.readouterr().err

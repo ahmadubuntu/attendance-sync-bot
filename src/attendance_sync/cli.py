@@ -5,6 +5,7 @@
 """
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 import sys
@@ -19,6 +20,28 @@ from .kasra_reconcile import (DEFAULT_DESCRIPTION, build_payloads, daily_report_
                               our_days, reconcile, validate_private_path, write_plan)
 
 JALALI_HINT = 'Use Jalali YYYY/MM/DD for --start and --end, with start not after end'
+
+
+def approval_code(content):
+    """Short code bound to the exact content a human is approving.
+
+    Any change to the payloads changes the code, so a code read from one dry run can never
+    authorise a different write.
+    """
+    canonical = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:12]
+
+
+def require_approval(expected, given):
+    """Return the approved value or refuse; never proceed on a stale or missing code."""
+    if given == expected:
+        return given
+    if not given and sys.stdin.isatty():
+        typed = input(f'Type the approval code {expected} to proceed: ').strip()
+        if typed == expected:
+            return typed
+        raise ValueError('Approval code did not match; nothing was written')
+    raise ValueError(f'Approval required: re-run the dry run and pass --approve {expected}')
 
 
 def load_corrections(path):
@@ -46,6 +69,7 @@ def build_parser():
     submit = sub.add_parser('kasra-submit', help='Print (or with --confirm send) the plan payloads')
     submit.add_argument('--plan', default='artifacts/kasra-plan.json')
     submit.add_argument('--confirm', action='store_true')
+    submit.add_argument('--approve', help='Approval code printed by the dry run; required before any write')
     submit.add_argument('--include-review', dest='include_review', action='store_true')
     submit.add_argument('--created-docs', dest='created_docs', default='artifacts/kasra-created.json')
     submit.add_argument('--delete-doc-id', dest='delete_doc_id')
@@ -203,9 +227,12 @@ def run_submit(args, env, kasra):
             raise ValueError('Missing plan file')
         plan = json.loads(plan_path.read_text(encoding='utf-8'))
         if args.delete_doc_id:
+            expected = approval_code({'delete_doc_id': str(args.delete_doc_id)})
             if not args.confirm:
-                print(json.dumps({'mode': 'dry_run', 'would_delete': str(args.delete_doc_id)}))
+                print(json.dumps({'mode': 'dry_run', 'would_delete': str(args.delete_doc_id),
+                                  'approval_code': expected}))
                 return 0
+            require_approval(expected, args.approve)
             client = open_client(args, env, kasra)
             try:
                 print(json.dumps(client.delete_document(args.delete_doc_id, confirm=True)))
@@ -218,14 +245,19 @@ def run_submit(args, env, kasra):
         created_path = validate_private_path(args.created_docs)
         selected = [row for row in payloads if args.include_review or not row.get('requires_review')]
         skipped = [row for row in payloads if row not in selected]
+        expected = approval_code(selected)
         for payload in selected:
             print(render_payload(payload))
         for payload in skipped:
             print('# skipped until reviewed: ' + render_payload(payload, compact=True))
         stage = 'write'
         if not args.confirm:
-            print(json.dumps({'mode': 'dry_run', 'payloads': len(selected), 'skipped': len(skipped), 'written': 0}))
+            print(json.dumps({'mode': 'dry_run', 'payloads': len(selected), 'skipped': len(skipped),
+                              'written': 0, 'approval_code': expected}))
+            print('# to register these exact documents re-run with: --confirm --approve ' + expected,
+                  file=sys.stderr)
             return 0
+        require_approval(expected, args.approve)
         client = open_client(args, env, kasra)
         try:
             created = []

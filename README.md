@@ -1,7 +1,25 @@
-# AttendanceSync — Stage 1
+# AttendanceSync
 
-Python 3.11+ read-only Mattermost attendance preview. No Kasra connection,
-login, writes, notifications, approvals, database, or scheduling is implemented.
+Turn the daily attendance notes you already post in your company chat (Mattermost) into
+the remote-work and overtime requests your company attendance system (Kasra) expects —
+with a human approving every single write.
+
+What it does:
+
+1. **Extract** entry/exit, work ranges and overtime from your personal Mattermost channel,
+   keeping the original message text as evidence.
+2. **Compute** regular vs. out-of-obligation minutes per day, splitting overnight work at
+   midnight and applying the daily quota rules (Saturday–Tuesday 9h, Wednesday 8h,
+   Thursday/Friday all overtime), exactly to the minute and never rounded.
+3. **Reconcile** the result against the live Kasra documents so you can see what is already
+   requested, what is still waiting for an approver, and what was never registered.
+4. **Register** the missing items as Kasra credit requests — only after you read the exact
+   payloads and approve them with a content-bound code, and every created document carries a
+   note saying a bot created it and that it may need correction.
+
+Nothing is ever written without that per-submission approval: there is no auto-submit mode.
+Reports, corrections, plans, created-document records and the browser session all live in
+private, git-ignored paths with owner-only permissions, and no secret is ever printed.
 
 ## Install and verify
 
@@ -98,10 +116,16 @@ session values are never printed, logged, stored in the repository or returned b
   (default `artifacts/kasra-plan.json`, mode 0600 in a 0700 directory) together with the
   exact payloads that would be created. `--output` changes the path.
 - `kasra-submit --plan <file>` prints those payloads and exits 0 without touching Kasra.
-  Only `--confirm` performs the write; payloads flagged `requires_review` (an interval
-  ending exactly at midnight) are skipped unless `--include-review` is added, and the
-  created document id is read back from the document list into `artifacts/kasra-created.json`.
-  `kasra-submit --delete-doc-id <id> --confirm` deletes exactly one document by id.
+  **Every write requires an explicit per-submission approval:** the dry run prints an
+  `approval_code` derived from the exact payloads it would send, and the write only happens
+  with `--confirm --approve <code>`. A missing, wrong, or stale code (the plan changed after
+  the code was issued) is refused with exit 2 and nothing is sent. In an interactive terminal
+  the code is prompted for instead of passed on the command line. Payloads flagged
+  `requires_review` (an interval ending exactly at midnight) are skipped unless
+  `--include-review` is added, and the created document id is read back from the document
+  list into `artifacts/kasra-created.json`.
+  `kasra-submit --delete-doc-id <id>` prints the code bound to that id, and
+  `--confirm --approve <code>` deletes exactly that one document.
 - `--snapshot <file>` reuses a private recorded read (written by `--save-snapshot`) so the
   reconciliation and the dry run work without opening a browser.
 
@@ -114,9 +138,11 @@ Minutes are exact integers and are never rounded. Kasra is a request system: a s
 document is not finalized attendance, and a day covered by an active document is never
 reported as missing.
 
-The confirmed write path is not verified against the live system: the credit-request save
-call (`EnterCreditNameSpace.onClickBtnSave`) has never been exercised, so no endpoint or
-payload is assumed and no document has been created, edited or deleted by this project.
+The write path was exercised once against the live system and verified by reading the
+result back: two credit requests for one day (type 14085 for the obligation and type 60054
+for the excess) were created with the required description and reappeared in the document
+list with status 201 (waiting for an approver). The writer reads every created document back
+before it reports success, and it never reports a write it cannot find again.
 
 ## Rules and limitations
 
@@ -193,17 +219,23 @@ closed interval on the current day would be reported as a deferred span. Both
 passed the artifact verifier, including source provenance
 and complete allocated/withheld/deferred duration coverage.
 
-The regression suite passes 176 tests: the 126 stage-one tests plus 50 stage-two tests
-covering Kasra reconciliation, the dry-run-by-default writer, the payload/description
-rules and the new CLI subcommands. Every correction in this cycle started
+The regression suite passes 186 tests: the 126 stage-one tests plus stage-two tests
+covering Kasra reconciliation, the dry-run-by-default writer, the approval gate (missing,
+wrong and stale approval codes are all refused), the payload/description rules and the new
+CLI subcommands. Every correction in this cycle started
 from an observed failure: the date-context annotation, the corrections file and
 current-day handling in the CLI, and the daily-summary display of deferred work.
 Earlier regressions still cover multi-marker technical prose, unresolved-day
 quota blocking, partial overnight withholding, and immutable source evidence.
 These are observed snapshots, not hardcoded expectations.
 
-Remaining work: the disputed Tuesday date is now confirmed by the user and bound
-to the source fingerprint, but no Kasra record has been read or compared, so
-`kasra_check` stays `not_performed`. Kasra discovery, discrepancy comparison
-against the real system, and every subsequent write still require separate
-authorization.
+Remaining work: reconciliation and submission are run on demand; there is no scheduler or
+service in this repository, and the approval code must be read and typed for every write.
+Two review suggestions are still open: surfacing non-blocking interval warnings
+(`claim_ahead_of_post`) in the daily summary, and flagging a day whose missing minutes cannot
+be explained by the readable document coverage. The unverified boundary cases are listed in
+`docs/kasra-contract.md` (§9), including an interval that ends exactly at midnight.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
