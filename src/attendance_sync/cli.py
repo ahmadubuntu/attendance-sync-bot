@@ -4,10 +4,18 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
+from pathlib import Path
 import httpx
 from .config import load
 from .mattermost import Mattermost, collect, APIError
 from .report import build_report, write_reports
+
+
+def load_corrections(path):
+    location = Path(path)
+    if not location.exists():
+        return None
+    return json.loads(location.read_text(encoding='utf-8'))
 
 
 def main(argv=None, *, env=None, transport=None):
@@ -18,11 +26,17 @@ def main(argv=None, *, env=None, transport=None):
     preview.add_argument('--from',dest='from_time')
     preview.add_argument('--to',dest='to_time')
     preview.add_argument('--output',default='artifacts/review')
+    preview.add_argument('--corrections',default='var/corrections.json')
+    preview.add_argument('--as-of',dest='as_of')
     preview.add_argument('--debug',action='store_true')
     args = parser.parse_args(argv)
     stage = 'configuration'
     try:
         config = load(os.environ if env is None else env)
+        as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.now(timezone.utc)
+        if as_of.utcoffset() is None:
+            raise ValueError('--as-of requires a timezone-aware timestamp')
+        corrections = load_corrections(args.corrections)
         if args.from_time or args.to_time:
             if not args.from_time or not args.to_time or args.days is not None:
                 raise ValueError('Use both --from and --to, without --days')
@@ -54,8 +68,9 @@ def main(argv=None, *, env=None, transport=None):
             if any(not isinstance(p.get('message'),str) or not isinstance(p.get('user_id'),str) for p in posts):
                 raise APIError('Mattermost post schema mismatch')
         stage = 'report'
-        report = build_report(posts,own['id'],start,end)
+        report = build_report(posts,own['id'],start,end,corrections=corrections,as_of=as_of)
         report['window']['context_from'] = context_start.isoformat()
+        report['corrections_path'] = str(args.corrections)
         report['context_policy'] = '14-day bounded lookback; unresolved boundaries remain review'
         paths = write_reports(report,args.output)
         counts = {k:v for k,v in report.items() if k.endswith('_count')}

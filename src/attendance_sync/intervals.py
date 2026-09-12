@@ -59,6 +59,13 @@ def build_intervals(events, ranges):
             closed_days.add(entry['date'])
     items += [resolve(r['range_id'], [r['range_id']], r['date'], r['start_time'], r['end_time'],
                     'activity_range', r['explicit_overtime'], r['reasons'], r['status']) for r in ranges]
+    for activity in items:
+        if activity['origin'] != 'activity_range' or not activity['start_at']:
+            continue
+        if any(p['origin'] == 'paired_events' and p['end_at'] and p['start_at'][:10] == activity['start_at'][:10]
+               and p['end_at'] <= activity['start_at'] for p in items):
+            activity['explicit_overtime'] = True
+            activity['reasons'].append('return_after_exit')
     items += [resolve('unmatched:'+e['event_id'], [e['event_id']], e['date'] or e.get('source_date'),
                       None, None, 'unmatched_event', e['explicit_overtime'], e['reasons'], 'review')
               for e in events if e.get('pairing_eligible', True)

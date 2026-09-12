@@ -7,13 +7,18 @@ import stat
 
 for stem in ('review', 'rolling-review'):
     root = Path('artifacts')
-    report = json.loads((root/(stem+'.json')).read_text())
+    source = root/(stem+'.json')
+    if not source.exists():
+        raise SystemExit('Missing artifact '+str(source)+': run the preview command for both windows first')
+    report = json.loads(source.read_text())
     assert report['coverage_complete'] is True
     assert report['own_count']+report['other_count'] == report['fetched_count']
     assert report['candidate_count'] == len(report['events'])
-    assert report['ready_count']+report['review_count'] == report['candidate_count']
-    for key in ('range','interval','segment','context_range','context_event','context_interval','allocation_blocker','withheld_span','context_withheld_span'):
-        assert report[key+'_count'] == len(report[key+'s'])
+    assert report['ready_count']+report['review_count']+report['open_day_count'] == report['candidate_count']
+    plurals = {'date_discrepancy': 'date_discrepancies'}
+    for key in ('range','interval','segment','context_range','context_event','context_interval','allocation_blocker',
+                'withheld_span','context_withheld_span','deferred_span','context_deferred_span','date_discrepancy'):
+        assert report[key+'_count'] == len(report[plurals.get(key, key+'s')])
     labels = json.loads((root/(stem+'-labels.json')).read_text())['labels']
     assert len(labels) == report['own_count']
     assert len({l['post_id'] for l in labels}) == len(labels)
@@ -35,19 +40,27 @@ for stem in ('review', 'rolling-review'):
         assert int((b-a).total_seconds())//60 == span['duration_minutes'] > 0
         assert span['local_date'] == a.date().isoformat()
         assert span['reasons'] and set(span['blocker_source_ids']) <= source_ids
+    for span in report['deferred_spans'] + report['context_deferred_spans']:
+        assert span['parent_interval_id'] in interval_by_id
+        a, b = map(datetime.fromisoformat, (span['start_at'], span['end_at']))
+        assert int((b-a).total_seconds())//60 == span['duration_minutes'] > 0
+        assert span['local_date'] == a.date().isoformat() == report['current_day']
+        assert span['submission_eligible'] is False and span['reasons'] == ['current_day_not_finished']
     for interval in report['intervals']:
         parts = [s for s in report['segments'] if s['parent_interval_id'] == interval['interval_id']]
         withheld = [s for s in report['withheld_spans'] if s['parent_interval_id'] == interval['interval_id']]
+        deferred = [s for s in report['deferred_spans'] if s['parent_interval_id'] == interval['interval_id']]
         assert interval['allocated_minutes'] == sum(s['duration_minutes'] for s in parts)
         if interval['expected_minutes'] is None:
-            assert not parts and not withheld and interval['withheld_minutes'] is None
+            assert not parts and not withheld and not deferred and interval['withheld_minutes'] is None
             continue
         a, b = map(datetime.fromisoformat, (interval['start_at'], interval['end_at']))
         assert interval['expected_minutes'] == int((b-a).total_seconds())//60
         assert interval['withheld_minutes'] == sum(s['duration_minutes'] for s in withheld)
-        assert interval['expected_minutes'] == interval['allocated_minutes'] + interval['withheld_minutes']
+        assert interval['deferred_minutes'] == sum(s['duration_minutes'] for s in deferred)
+        assert interval['expected_minutes'] == interval['allocated_minutes'] + interval['withheld_minutes'] + interval['deferred_minutes']
         cursor = a
-        for part in sorted(parts + withheld, key=lambda p: p['start_at']):
+        for part in sorted(parts + withheld + deferred, key=lambda p: p['start_at']):
             assert datetime.fromisoformat(part['start_at']) == cursor
             cursor = datetime.fromisoformat(part['end_at'])
         assert cursor == b

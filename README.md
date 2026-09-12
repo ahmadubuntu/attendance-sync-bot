@@ -32,6 +32,20 @@ exception type, and redacted diagnostics. Exit 0 means a preview was generated,
 not that attendance was approved or submitted. Exit 2 means no complete new
 preview; any existing reports remain from an earlier run.
 
+`--corrections` defaults to `var/corrections.json`. A missing file means no
+corrections; a malformed file fails the run. Only date corrections approved by
+the user are accepted, and each entry is bound to the source post ID, a SHA-256
+fingerprint of the source post, its raw date token, and the confirmed target
+date. The stored raw date and weekday remain unchanged; the confirmed date is
+recorded under `correction` and `original_date`. If the source message or
+timestamp later changes, the fingerprint no longer matches and the event returns
+to review with `stale_date_correction` instead of being silently corrected.
+
+`--as-of` is the explicit as-of instant for the current day and defaults to the
+run time. Naive timestamps are rejected. The current day is deferred: it is
+reported as `open_day`/`deferred_spans` with `submission_eligible: false` and
+never proposed for registration, because the day is still in progress.
+
 ## Output
 
 - `<output>.json`: schema v2 evidence, independent counts, intervals, and segments.
@@ -42,11 +56,18 @@ preview; any existing reports remain from an earlier run.
   Each interval exposes `expected_minutes`, `allocated_minutes`, and
   `withheld_minutes`; unresolved durations are null, not zero estimates.
   `withheld_spans` records selected per-day withheld boundaries, minutes, reasons,
-  and blocker source IDs; `context_withheld_spans` is separate. For every positive
-  resolved interval, expected minutes equal allocated plus explicitly withheld.
+  and blocker source IDs; `context_withheld_spans` is separate. `deferred_spans`
+  and `deferred_minutes` cover current-day work that must not be registered yet.
+  `date_discrepancies` records disputed dates with the previous/next entry dates,
+  the posting date, the inferred suggestion, neighbor support, and
+  `kasra_check: not_performed` / `comparison_status: pending_kasra_comparison`
+  until a real Kasra comparison exists. For every positive
+  resolved interval, expected minutes equal allocated plus explicitly withheld
+  plus deferred.
 - `<output>.html`: compact daily Gregorian/Jalali summary with separate work
-  spans, regular/overtime and withheld minute totals and day-specific review reasons; expandable escaped
-  evidence and metadata. Self-contained; open it locally.
+  spans, regular/overtime, withheld and deferred minute totals and day-specific
+  review reasons; expandable escaped evidence and metadata. Self-contained;
+  open it locally.
 - `<output>-labels.json`: every in-window own post's ID/version and proposed
   classification. `confirmed_label` stays null until human review.
 
@@ -59,7 +80,14 @@ people's message bodies are omitted. No channel content is sent to an LLM.
 
 - Times display in Asia/Tehran; dates include Gregorian and Jalali calendars.
 - Explicit source dates remain intact. Weekday/date conflicts remain review,
-  with a suggestion rather than an automatic correction.
+  with a suggestion rather than an automatic correction. A user-confirmed
+  correction entry may resolve a conflict, and disputed dates are reported under
+  `date_discrepancies` with neighboring entry dates, the posting date and clock,
+  and a pending Kasra comparison. Date mistakes are never inferred from a single
+  message without supporting neighbors or a confirmed correction.
+- The current day is never proposed for registration. It is reported separately
+  as still open, and any closed interval on the current day is deferred rather
+  than withheld, so an unfinished day is not mistaken for a missing record.
 - Exits pair to the latest earlier unmatched entry in posting order. A wrong
   exit weekday is retained as a warning, not used to reassign the entry.
   Conflicting explicit exit dates and tied cross-post timestamps require review.
@@ -78,8 +106,14 @@ people's message bodies are omitted. No channel content is sent to an LLM.
   Official holiday exceptions are not defined.
 - Exact duplicate interval representations merge provenance. Non-identical
   overlaps require review. No totals silently double-count overlapping work.
-- Activity ranges without a reliable date or confirmed work context remain
-  review. Lunch, power-loss, quoted and fenced-code ranges are excluded.
+- Recorded work ranges are taken at the clock values written in the message.
+  When a range has no explicit date and its recorded end time is not later than
+  the posting time, the local posting date anchors the range
+  (`posted_clock_inferred`); a recorded overnight range that already ended when a
+  morning message was posted anchors to the previous day
+  (`posted_clock_overnight_inferred`). Both keep a warning and their evidence, and
+  unknown or future durations still require review.
+- Lunch, power-loss, quoted and fenced-code ranges are excluded.
   No time is subtracted merely because a message mentions lunch or electricity.
 - `ready` describes parser confidence, not external-write authorization. Review
   intervals do not produce allocation segments. Known/candidate days containing
@@ -107,18 +141,25 @@ change later runs. Every preview recomputes pairing from the fetched versions.
 ## Verified correctness rerun
 
 The fixed-window live read produced 99 posts: 95 own and 4 other-author posts;
-19 attendance messages, 20 event markers, 2 activity ranges, 13 intervals, and
-12 allocated segments. There were 17 ready events and 3 review events. The
-rolling 14-day read produced 97 posts (93 own, 4 other) at execution time.
-Both previews retained one context event and passed the artifact verifier,
-including source provenance and complete allocated/withheld duration coverage.
-Each exposed 6 day-blocker records, 5 withheld spans (1,807 minutes), 3,999
-allocated minutes, and one unresolved interval with unknown duration.
-The regression suite passes 112 tests. The final three blockers were reproduced
-RED before their fixes; regression coverage includes both full/partial withholding,
-candidate-day ambiguity, excluded markers, and immutable source evidence.
+19 attendance messages, 20 event markers, 2 recorded activity ranges, 13
+intervals, and 19 allocated segments. The rolling 14-day read produced 97 posts
+(93 own, 4 other) at execution time. Both previews retained one context event,
+one confirmed date correction, one reported date discrepancy with a pending
+Kasra comparison, and one open current-day record: an entry with no closing clock
+is reported as an `open_day` event rather than a registration candidate, and a
+closed interval on the current day would be reported as a deferred span. Both
+passed the artifact verifier, including source provenance
+and complete allocated/withheld/deferred duration coverage.
+
+The regression suite passes 126 tests. Every correction in this cycle started
+from an observed failure: the date-context annotation, the corrections file and
+current-day handling in the CLI, and the daily-summary display of deferred work.
+Earlier regressions still cover multi-marker technical prose, unresolved-day
+quota blocking, partial overnight withholding, and immutable source evidence.
 These are observed snapshots, not hardcoded expectations.
 
-Remaining human review includes the conflicting Tuesday date, an unmatched
-current entry, unanchored activity ranges, and interval overlaps. Kasra discovery
-and every subsequent write require separate authorization.
+Remaining work: the disputed Tuesday date is now confirmed by the user and bound
+to the source fingerprint, but no Kasra record has been read or compared, so
+`kasra_check` stays `not_performed`. Kasra discovery, discrepancy comparison
+against the real system, and every subsequent write still require separate
+authorization.

@@ -25,3 +25,18 @@ def test_report_pipeline_context_privacy_counts_and_permissions(tmp_path):
     assert '<script>' not in page and '&lt;script&gt;' in page
     assert '1405/' in page and '2026-09-05' in page
     assert len(json.loads(paths[2].read_text())['labels']) == 3
+
+
+def test_report_html_shows_current_day_deferral_and_date_discrepancies(tmp_path):
+    from attendance_sync.report import build_report, write_reports
+    rows = [post('دوشنبه 14050623\nورود 0810 خروج 1710','2026-09-14T17:10:00+03:30','current'),
+            post('سه شنبه 14050622\nورود 0810 خروج 1710','2026-09-15T17:10:00+03:30','conflict')]
+    start,end = datetime(2026,9,13,tzinfo=timezone.utc),datetime(2026,9,20,tzinfo=timezone.utc)
+    report = build_report(rows,'self',start,end,as_of=datetime.fromisoformat('2026-09-14T18:00:00+03:30'))
+    assert report['current_day'] == '2026-09-14' and report['deferred_span_count'] == 1
+    assert report['date_discrepancy_count'] == 1 and report['withheld_span_count'] == 1
+    page = write_reports(report,tmp_path/'private'/'review')[1].read_text()
+    assert '<summary>date_discrepancies (1)' in page
+    assert '<summary>deferred_spans (1)' in page
+    assert 'Deferred min' in page
+    assert 'not submitted on the current day' in page

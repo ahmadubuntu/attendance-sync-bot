@@ -135,6 +135,9 @@ def parse_post(post):
                 explicit_overtime=bool(re.search(r'اضافه ?کار|خارج از موظفی|overtime', line, re.I)),
                 status='review' if issues else 'ready', reasons=issues, rule_version=RULE_VERSION))
     ranges = []
+    work_pattern = r'کار|ایجاد|توسعه|بررسی|جلسه|رفع|تست|پیاده|کالکشن|work|develop|fix|deploy'
+    work_context = [raw for raw in active_lines if re.search(work_pattern, normalize(raw), re.I)
+                    and not re.search(r'ناهار|قطع.*برق|خاموش|نسخه|version|log\b|نبود|نیست|نکردم', normalize(raw), re.I)]
     fenced = False
     range_pattern = re.compile(r'(?<![\d:])(\d{1,2}:\d{2}|\d{4})\s*(?:[-–—]|تا)\s*(\d{1,2}:\d{2}|\d{4})(?![\d:])')
     for line_index, raw_line in enumerate(post['message'].splitlines()):
@@ -151,16 +154,29 @@ def parse_post(post):
             issues = list(reasons)
             if re.search(r'نبود|نیست|اصلاح|اشتباه|نکردم', line):
                 issues.append('negation_or_correction')
-            if not re.search(r'کار|ایجاد|توسعه|بررسی|جلسه|رفع|تست|پیاده|کالکشن|work|develop|fix|deploy', line, re.I):
+            if not work_context:
                 issues.append('activity_context_unconfirmed')
             if start is None or end is None:
                 issues.append('invalid_time')
+            range_day, range_basis = day, basis
+            warnings = []
+            if basis == 'post_date_assumed' and work_context and start and end and start != end:
+                completed = datetime.fromisoformat(local.isoformat()+'T'+end).replace(tzinfo=TEHRAN)
+                morning_overnight = start > end and posted.astimezone(TEHRAN).hour < 12
+                if completed <= posted and (start < end or morning_overnight):
+                    issues = [r for r in issues if r != 'post_date_assumed']
+                    range_basis = 'posted_clock_inferred'
+                    if morning_overnight:
+                        range_day = local - timedelta(days=1)
+                        range_basis = 'posted_clock_overnight_inferred'
+                    warnings.append('inferred_date_from_completed_range')
             ranges.append(dict(range_id=f"{post['id']}:range:{len(ranges)}", post_id=post['id'],
                 source_version=post.get('edit_at', 0), raw_text=raw_line,
                 source_span={'line_index': line_index, 'start': 0, 'end': len(raw_line)},
                 raw_date=raw_date, raw_weekday=raw_weekday, raw_context=list(raw_context),
-                date=day.isoformat() if day else None, suggested_date=suggestion.isoformat() if suggestion else None,
-                date_basis=basis, candidate_dates=sorted(candidate_days), start_time=start, end_time=end, posted_at=posted.isoformat(),
+                date=range_day.isoformat() if range_day else None, suggested_date=suggestion.isoformat() if suggestion else None,
+                date_basis=range_basis, candidate_dates=[range_day.isoformat()] if warnings else sorted(candidate_days), start_time=start, end_time=end, posted_at=posted.isoformat(),
+                warnings=warnings, work_context=work_context,
                 explicit_overtime=bool(re.search(r'اضافه ?کار|خارج از موظفی|overtime', line, re.I)),
                 status='review' if issues else 'ready', reasons=issues, rule='activity_range', rule_version=RULE_VERSION))
     return events, ranges
