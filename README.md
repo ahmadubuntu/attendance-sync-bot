@@ -76,6 +76,48 @@ Use a dedicated output directory. Default `artifacts/` is ignored by `.gitignore
 Attendance/activity source lines are retained verbatim; unrelated posts and other
 people's message bodies are omitted. No channel content is sent to an LLM.
 
+## Stage 2 — Kasra reconciliation (read-only by default)
+
+The Kasra integration is documented in `docs/kasra-contract.md`. Authentication and every
+request run inside a real Chrome session (Playwright, `executable_path` `/usr/bin/google-chrome`,
+headless) because the gateway rejects plain HTTP clients. The saved session lives in
+`var/kasra-recon/session-state.json` (private, ignored); when it expires, the adapter logs in
+again from `KASRA_URL`, `KASRA_USERNAME` and `KASRA_PASSWORD`. Credentials, cookies and
+session values are never printed, logged, stored in the repository or returned by the API.
+
+```sh
+.venv/bin/python -m attendance_sync kasra-status --start 1405/06/01 --end 1405/06/21
+.venv/bin/python -m attendance_sync kasra-plan --start 1405/06/01 --end 1405/06/21
+.venv/bin/python -m attendance_sync kasra-submit --plan artifacts/kasra-plan.json
+```
+
+- `kasra-status` reads the daily work report and the document inquiry, then prints one line
+  per day (Gregorian and Jalali date, classification, expected/requested/missing/pending
+  minutes per category) plus a JSON summary with the unregistered Jalali days. It only reads.
+- `kasra-plan` writes the same reconciliation to a private plan file
+  (default `artifacts/kasra-plan.json`, mode 0600 in a 0700 directory) together with the
+  exact payloads that would be created. `--output` changes the path.
+- `kasra-submit --plan <file>` prints those payloads and exits 0 without touching Kasra.
+  Only `--confirm` performs the write; payloads flagged `requires_review` (an interval
+  ending exactly at midnight) are skipped unless `--include-review` is added, and the
+  created document id is read back from the document list into `artifacts/kasra-created.json`.
+  `kasra-submit --delete-doc-id <id> --confirm` deletes exactly one document by id.
+- `--snapshot <file>` reuses a private recorded read (written by `--save-snapshot`) so the
+  reconciliation and the dry run work without opening a browser.
+
+Per-day classification: `ok`, `pending_approval` (a document of the right type exists and
+waits for an approver), `no_document`, `missing_regular`, `missing_overtime`,
+`partial_regular`, `partial_overtime`, and `no_work` for a day with no extracted work.
+Every document the writer creates carries the configurable description in
+`kasra_reconcile.DEFAULT_DESCRIPTION`; the default is overridable with `--description`.
+Minutes are exact integers and are never rounded. Kasra is a request system: a saved
+document is not finalized attendance, and a day covered by an active document is never
+reported as missing.
+
+The confirmed write path is not verified against the live system: the credit-request save
+call (`EnterCreditNameSpace.onClickBtnSave`) has never been exercised, so no endpoint or
+payload is assumed and no document has been created, edited or deleted by this project.
+
 ## Rules and limitations
 
 - Times display in Asia/Tehran; dates include Gregorian and Jalali calendars.
@@ -151,7 +193,9 @@ closed interval on the current day would be reported as a deferred span. Both
 passed the artifact verifier, including source provenance
 and complete allocated/withheld/deferred duration coverage.
 
-The regression suite passes 126 tests. Every correction in this cycle started
+The regression suite passes 176 tests: the 126 stage-one tests plus 50 stage-two tests
+covering Kasra reconciliation, the dry-run-by-default writer, the payload/description
+rules and the new CLI subcommands. Every correction in this cycle started
 from an observed failure: the date-context annotation, the corrections file and
 current-day handling in the CLI, and the daily-summary display of deferred work.
 Earlier regressions still cover multi-marker technical prose, unresolved-day

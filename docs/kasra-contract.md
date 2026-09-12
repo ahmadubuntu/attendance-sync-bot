@@ -157,3 +157,68 @@ No secret, password, session cookie or personal record value is stored in this d
   the approver workflow behaves for a retroactive date.
 - Whether `دورکاری ساعتی` must also be requested for days that are fully covered by a
   schedule, to clear `كسر حضور`.
+
+## 10. Stage two observations — reading the two grids (read-only, 2026-09-12)
+
+Everything below was read with GET-equivalent page loads only; no document was created,
+edited or deleted. Identifiers of real records are deliberately not repeated here.
+
+### 10.1 Grid extraction technique
+
+Both forms are ASP.NET/Kendo grids whose cells sit inside nested tables. Reading
+`tr.querySelectorAll('td')` collects the descendant cells of the nested tables too and
+concatenates many records into one row. Use `table.rows` / `row.cells` instead: that
+enumerates only the cells of that table. `var/kasra-recon/probe_docs_grid.py` and
+`probe_docs_cells.py` (read-only, gitignored) are the probes that established this.
+
+### 10.2 Daily work report (`MainDailyReport`, menu 1302)
+
+- Filter fields are `TxtSDate`/`TxtEDate` (mirrored to hidden `SDate`/`EDate`); the filter
+  button is `#BtnFilter`; the grid element id is
+  `ctl00_ContentPlaceHolder1_GrdDailyReport` and its header row carries the column names.
+- `دوركاري` holds the **accepted** regular remote-work duration and
+  `دوركاري خارج از موظفي` the accepted excess duration, both as `HH:MM`. A document that
+  is still waiting for an approver does **not** add to these columns.
+- A waiting request is visible in the `ترددها` column as
+  `دوركاري ساعتي (منتظر تایید)`; the waiting duration is not printed in the report.
+- The last row of the grid is a `جمع` total row without a Jalali date and must be skipped.
+- Consequence: the report columns alone cannot tell "missing" from "already requested but
+  not yet approved". Both the amount column and the document list are needed.
+
+### 10.3 Document inquiry (`DocInfoNew`, menu 13157)
+
+- The visible grid has 32 columns whose labels are the filter names
+  (`فیلترDocID`, `فیلترStatusID`, `فیلترDocTypeID`, `فیلترNwSDate`, `فیلترNwEDate`,
+  `فیلترDateRecord`, `DocDescr`, `DocTitle`, `RSDate`, `REDate`, ...). Column labels are
+  matched by their ASCII part, ignoring the Persian prefix.
+- `RSDate`/`REDate` are the accounting dates of the document, `DateRecord` is the date the
+  document was keyed in; they differ for retroactive requests. The accounting day is the
+  correct key for reconciliation.
+- `DocTitle` is built as
+  `مجوز <credit type title> از تاریخ <RSDate> تا تاریخ <REDate> از <HH:MM> تا <HH:MM>`
+  plus the employee name. **The requested time range of each document is therefore
+  readable without opening the document**, which makes exact per-day coverage computable
+  (for example an approved excess document covering `16:55`–`20:26` on its `RSDate`).
+- The grid does not print `DocDescr`; the export/print view shows the same range text.
+- `CmbWorkPeriod` lists Jalali months newest first (`مهر 1405`, `شهريور 1405`, ...). The
+  filtered grid still returns documents whose accounting dates fall in the neighbouring
+  month (1405/05 rows appeared while 1405/06 was selected), so rows must be filtered by
+  their own `RSDate` after reading.
+- Toolbar: `OToolBar_BtnFilter`, `OToolBar_BtnShowAll`, `OToolBar_BtnDel`,
+  `OToolBar_BtnEdit`, `OToolBar_BtnPDF`, `OToolBar_BtnExcel`, and the request buttons
+  `BtnRegisterCredit`, `BtnAttendance`, `BtnDailyItem`. `OToolBar_BtnDel` acts on the
+  selected grid row (row checkbox) and the page then shows its own confirmation prompt
+  (`ctl00_ContentPlaceHolder1_BtnOk`).
+
+### 10.4 Consequences implemented in stage two
+
+1. Reconciliation compares, per Jalali day and per credit type, our expected minutes with
+   the minutes of **active** documents (any observable status) of that day. A day is only
+   reported as missing when no document of the needed credit type exists for it; a waiting
+   document makes the day `pending_approval` instead.
+2. Because document ranges are readable, the missing part of a partially registered day is
+   computed by interval subtraction, so the exact remaining minutes and their start/end
+   clocks are known without rounding.
+3. Days whose accepted duration is below the document sum (a document exists but the report
+   column stays empty, observed for `دوركاري ساعتي`) are **not** re-requested; the plan
+   surfaces them without creating a duplicate document.

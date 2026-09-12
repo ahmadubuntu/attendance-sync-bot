@@ -174,6 +174,29 @@ def test_implausibly_future_claim_is_review_even_after_cutoff_passes(text):
     assert 'future_work_after_post' in report['intervals'][0]['reasons']
 
 
+def test_claim_ahead_of_post_is_eligible_once_the_as_of_instant_has_passed():
+    report = build_report(
+        [post('شنبه 14050621 ورود 0830 خروج 1945', '2026-09-12T19:16:00+03:30')],
+        'self', datetime.fromisoformat('2026-09-12T00:00:00+03:30'),
+        datetime.fromisoformat('2026-09-13T00:00:00+03:30'),
+        as_of=datetime.fromisoformat('2026-09-13T00:05:00+03:30'))
+    interval = report['intervals'][0]
+    assert interval['status'] == 'ready'
+    assert 'future_work_after_post' not in interval['reasons']
+    assert interval['warnings'] == ['claim_ahead_of_post']
+    assert sum(row['duration_minutes'] for row in report['segments']) == 675
+
+
+def test_claim_ahead_of_the_as_of_instant_stays_review():
+    report = build_report(
+        [post('شنبه 14050621 ورود 0830 خروج 1945', '2026-09-12T19:16:00+03:30')],
+        'self', datetime.fromisoformat('2026-09-12T00:00:00+03:30'),
+        datetime.fromisoformat('2026-09-13T00:00:00+03:30'),
+        as_of=datetime.fromisoformat('2026-09-12T19:30:00+03:30'))
+    assert report['segments'] == []
+    assert 'future_work_after_post' in report['intervals'][0]['reasons']
+
+
 @pytest.mark.parametrize('text,stamp', [
     ('شنبه کار 0800-1700', '2026-09-12T16:59:30+03:30'),
     ('شنبه کار 2300-0400', '2026-09-13T04:00:00+03:30'),

@@ -49,11 +49,20 @@ def build_report(posts, own_id, start, end, *, corrections=None, as_of=None):
         for source_id in interval['source_ids']:
             source = source_by_id[source_id]
             keys = ('start_at', 'end_at') if 'range_id' in source else ('start_at',) if source['kind'] == 'in' else ('end_at',)
-            latest = datetime.fromisoformat(source['posted_at']) + timedelta(minutes=1)
-            if any(interval[key] and datetime.fromisoformat(interval[key]) > latest for key in keys):
+            posted_limit = datetime.fromisoformat(source['posted_at']) + timedelta(minutes=1)
+            # A claim may legitimately be written a little before the work ends. Once the
+            # evaluation instant has passed the claim is no longer future work, so the strict
+            # posting-time bound is downgraded to a warning; without an explicit as-of instant
+            # the conservative posting-time bound stays blocking.
+            blocking_limit = as_of if as_of is not None else posted_limit
+            claimed = [interval[key] for key in keys if interval[key]]
+            if any(datetime.fromisoformat(value) > blocking_limit for value in claimed):
                 interval['status'] = 'review'
                 if 'future_work_after_post' not in interval['reasons']:
                     interval['reasons'].append('future_work_after_post')
+            elif as_of is not None and any(datetime.fromisoformat(value) > posted_limit for value in claimed):
+                if 'claim_ahead_of_post' not in interval.setdefault('warnings', []):
+                    interval['warnings'].append('claim_ahead_of_post')
         if any(interval[key] and datetime.fromisoformat(interval[key]) > end for key in ('start_at', 'end_at')):
             interval['status'] = 'review'
             interval['reasons'].append('future_work_after_cutoff')
