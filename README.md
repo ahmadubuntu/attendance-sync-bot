@@ -52,7 +52,7 @@ python -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-Expected last line: `235 passed`. If you see that, the program is installed correctly.
+Expected last line: `243 passed`. If you see that, the program is installed correctly.
 
 ### 3. Give it your details, once per terminal session
 
@@ -325,6 +325,10 @@ before it reports success, and it never reports a write it cannot find again.
 - The current day is never proposed for registration. It is reported separately
   as still open, and any closed interval on the current day is deferred rather
   than withheld, so an unfinished day is not mistaken for a missing record.
+- An exit always closes the latest earlier unmatched entry, whatever day it was written on: a
+  late evening exit, an after-midnight exit and a next-morning exit all attach to the entry they
+  follow, and the work is counted on the day that entry opened. A different weekday named on the
+  exit is retained as evidence rather than used to reassign the entry.
 - Exits pair to the latest earlier unmatched entry in posting order. A wrong
   exit weekday is retained as a warning, not used to reassign the entry.
   Conflicting explicit exit dates and tied cross-post timestamps require review.
@@ -388,13 +392,17 @@ closed interval on the current day would be reported as a deferred span. Both
 passed the artifact verifier, including source provenance
 and complete allocated/withheld/deferred duration coverage.
 
-The regression suite passes 235 tests: the stage-one parser and provenance tests, the
+The regression suite passes 243 tests: the stage-one parser and provenance tests, the
 stage-two tests covering Kasra reconciliation, the dry-run-by-default writer and the
 approval gate (missing, wrong and stale approval codes are all refused), plus this cycle's
 pairing edge cases and the period report. Headline behaviours now pinned by tests:
 
 - an exit closes the latest earlier unmatched entry, and a new entry never closes the
   previous one;
+- an exit closes that entry on whatever day the exit was written — late the same evening, after
+  midnight, or the next morning before the new day's entry — and the work is counted on the
+  day the entry opened; a weekday named on the exit is kept as evidence and reported, never
+  silently rewritten;
 - a pair decided by anything other than clock order stays in review and drags its
   counterpart with it, so no interval is ever allocated with a missing side;
 - a day holding a single clock becomes an unresolved remainder that blocks its own day and
@@ -412,8 +420,9 @@ evidence. These are observed snapshots, not hardcoded expectations.
 
 Remaining work: reconciliation and submission are run on demand; there is no scheduler or
 service in this repository, and the approval code must be read and typed for every write.
-An exit written on a later working day is not always attributed to the day it belongs to,
-which is the first thing to fix before any automatic submission. Two review suggestions are
+An exit written with an explicit date on a *later* day than the entry it follows keeps that
+named day and is reported for review rather than being attributed back to the open entry, so
+a genuinely misdated exit still needs a human glance. Two review suggestions are
 still open: surfacing non-blocking interval warnings (`claim_ahead_of_post`) in the daily
 summary, and flagging a day whose missing minutes cannot be explained by the readable
 document coverage. The unverified boundary cases are listed in
