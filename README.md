@@ -52,7 +52,7 @@ python -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-Expected last line: `232 passed`. If you see that, the program is installed correctly.
+Expected last line: `235 passed`. If you see that, the program is installed correctly.
 
 ### 3. Give it your details, once per terminal session
 
@@ -280,7 +280,10 @@ session values are never printed, logged, stored in the repository or returned b
   `approval_code` derived from the exact payloads it would send, and the write only happens
   with `--confirm --approve <code>`. A missing, wrong, or stale code (the plan changed after
   the code was issued) is refused with exit 2 and nothing is sent. In an interactive terminal
-  the code is prompted for instead of passed on the command line. Payloads flagged
+  the code is prompted for instead of passed on the command line. `--timeout-ms` controls the
+  browser timeout and defaults to 120000; the Kasra save form routinely needs more than a
+  minute, and a smaller requested value is raised to that floor rather than honoured.
+  Payloads flagged
   `requires_review` (an interval ending exactly at midnight) are skipped unless
   `--include-review` is added, and the created document id is read back from the document
   list into `artifacts/kasra-created.json`.
@@ -306,6 +309,12 @@ before it reports success, and it never reports a write it cannot find again.
 
 ## Rules and limitations
 
+- **Registration windows differ by credit type.** Kasra accepts a normal remote-work request
+  (`دورکاری ساعتی`, type 14085) only for the most recent working day or two, so ordinary days
+  must be registered promptly. Out-of-obligation remote work (`دورکاری خارج از موظفی`, type
+  60054) can be registered for any day at any distance from today and is the correct type for
+  evening, weekend and holiday work. A rejected write is never retried blindly: read the
+  document list first so no duplicate is created.
 - Times display in Asia/Tehran; dates include Gregorian and Jalali calendars.
 - Explicit source dates remain intact. Weekday/date conflicts remain review,
   with a suggestion rather than an automatic correction. A user-confirmed
@@ -379,7 +388,7 @@ closed interval on the current day would be reported as a deferred span. Both
 passed the artifact verifier, including source provenance
 and complete allocated/withheld/deferred duration coverage.
 
-The regression suite passes 232 tests: the stage-one parser and provenance tests, the
+The regression suite passes 235 tests: the stage-one parser and provenance tests, the
 stage-two tests covering Kasra reconciliation, the dry-run-by-default writer and the
 approval gate (missing, wrong and stale approval codes are all refused), plus this cycle's
 pairing edge cases and the period report. Headline behaviours now pinned by tests:

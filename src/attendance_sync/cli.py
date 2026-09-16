@@ -75,6 +75,7 @@ def build_parser():
     submit.add_argument('--created-docs', dest='created_docs', default='artifacts/kasra-created.json')
     submit.add_argument('--delete-doc-id', dest='delete_doc_id')
     submit.add_argument('--state', default='var/kasra-recon/session-state.json')
+    submit.add_argument('--timeout-ms', dest='timeout_ms', type=int, default=120000)
     submit.add_argument('--debug', action='store_true')
     period = sub.add_parser('period-report', help='Write the private calendar and summary for a Jalali range')
     period.add_argument('--start')
@@ -445,16 +446,27 @@ def resolve_range(args, window):
     return start, end
 
 
+def build_kasra_client(args, environment):
+    """Build the browser client with the configured timeout, without opening it.
+
+    Split out of :func:`open_client` so the timeout policy is testable without launching a
+    browser, and so no caller can quietly request a timeout shorter than the save form needs.
+    """
+    if not environment.get('KASRA_URL'):
+        raise ValueError('Missing KASRA_URL')
+    requested = int(getattr(args, 'timeout_ms', 0) or 0)
+    return KasraBrowser(environment['KASRA_URL'], state_path=args.state,
+                        username=environment.get('KASRA_USERNAME'),
+                        password=environment.get('KASRA_PASSWORD'),
+                        timeout_ms=max(120000, requested))
+
+
 def open_client(args, env, kasra):
     if kasra is not None:
         kasra.open()
         return kasra
     environment = os.environ if env is None else env
-    if not environment.get('KASRA_URL'):
-        raise ValueError('Missing KASRA_URL')
-    client = KasraBrowser(environment['KASRA_URL'], state_path=args.state,
-                          username=environment.get('KASRA_USERNAME'),
-                          password=environment.get('KASRA_PASSWORD'))
+    client = build_kasra_client(args, environment)
     client.open()
     return client
 
