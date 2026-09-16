@@ -16,10 +16,134 @@ What it does:
 4. **Register** the missing items as Kasra credit requests — only after you read the exact
    payloads and approve them with a content-bound code, and every created document carries a
    note saying a bot created it and that it may need correction.
+5. **Report** any period you ask for as a colour-coded calendar plus a written summary, so
+   you can see at a glance what you worked, what was registered, and what is still missing.
 
 Nothing is ever written without that per-submission approval: there is no auto-submit mode.
 Reports, corrections, plans, created-document records and the browser session all live in
 private, git-ignored paths with owner-only permissions, and no secret is ever printed.
+
+## Start here if you are not a developer
+
+This section takes you from zero to a working period report without reading any code.
+If you only want the full command reference, skip to
+[Install and verify](#install-and-verify).
+
+### 1. The three things this program needs
+
+| What | Where it comes from | Example value |
+| --- | --- | --- |
+| Your chat server address | Your company's Mattermost web address | `https://goft.example.ir` |
+| Your personal access token | Mattermost: your avatar → **Profile** → **Security** → **Personal access tokens** → **Create token** | a long string of letters and numbers |
+| The ID of the channel where you post attendance notes | Open the channel; the last part of its web address after `/channels/` | `7y3f5gr5pjrdim3nfwpx141cwy` |
+
+You also need your Kasra login (address, username, password) before the program can
+compare with the attendance system. Reports work without it.
+
+### 2. Install it once
+
+Open a terminal in the folder where you downloaded this project and paste these lines
+one after another. Each one should finish without a red error message.
+
+```sh
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.lock.txt
+.venv/bin/python -m pip install -e '.[test]'
+.venv/bin/python -m pytest -q
+```
+
+Expected last line: `232 passed`. If you see that, the program is installed correctly.
+
+### 3. Give it your details, once per terminal session
+
+```sh
+export GOFT_URL='https://goft.example.ir'
+export GOFT_TOKEN='paste-your-token-here'
+export GOFT_CHANNEL_ID='7y3f5gr5pjrdim3nfwpx141cwy'
+export KASRA_URL='https://kasra.example.ir'
+export KASRA_USERNAME='your-username'
+export KASRA_PASSWORD='your-password'
+```
+
+Write your real values in place of the examples, inside the single quotes. Never send
+these lines to anyone and never commit them to Git. Closing the terminal forgets them.
+
+### 4. Part one — see what the program understood
+
+This never touches Kasra. It only reads your chat and shows what it found.
+
+```sh
+.venv/bin/python -m attendance_sync preview --days 14 --output artifacts/review
+```
+
+Then open `artifacts/review.html` in your browser. For every day you see the entry and
+exit times the program read from your messages, how many hours count as normal work and
+how many as overtime, and the original message next to it so you can check it yourself.
+
+### 5. Part two — see what is still missing in Kasra
+
+```sh
+.venv/bin/python -m attendance_sync kasra-status --review artifacts/review.json --start 1405/06/01 --end 1405/06/30
+```
+
+Dates here are Jalali in `YYYY/MM/DD` form. Each day gets one line: what the program
+expects, what Kasra already holds, and what is missing. Nothing is written.
+
+### 6. Part three — the period report you asked for
+
+```sh
+.venv/bin/python -m attendance_sync period-report --start 1405/05/21 --end 1405/06/20 --output artifacts/period-report
+```
+
+You get two files:
+
+- `artifacts/period-report.html` — a Saturday-to-Friday calendar, one coloured square per
+  day: **green** normal work, **orange** overtime, **dark orange** both, **blue** waiting
+  for an approver, **red** recorded absence, **grey** rest day or holiday. Hover any day
+  to see its exact times.
+- `artifacts/period-report.md` — the written summary: totals for the whole period and one
+  table row per day.
+
+Add `--no-kasra` when you want the same report without contacting the attendance system.
+
+### 7. Part four — register what is missing
+
+Nothing is sent until you approve the exact content. This is deliberate.
+
+```sh
+# 1. Build the plan: what would be sent, for which day, at which times
+.venv/bin/python -m attendance_sync kasra-plan --review artifacts/review.json --start 1405/06/22 --end 1405/06/22
+
+# 2. Read the payloads and get a code. Nothing is sent yet.
+.venv/bin/python -m attendance_sync kasra-submit --plan artifacts/kasra-plan.json
+
+# 3. Send them for real, using the code printed by step 2
+.venv/bin/python -m attendance_sync kasra-submit --plan artifacts/kasra-plan.json --confirm --approve <the-code>
+```
+
+If you change the plan after step 2, the code stops working and step 3 refuses to send —
+that is how you know the approval always matches what is really sent. Every document the
+program creates is read back from Kasra before it reports success, and the record lands in
+`artifacts/kasra-created.json`.
+
+### 8. The everyday routine
+
+1. Post your notes in the channel as you always do: `ورود 0815`, later `خروج 1710`.
+2. When you have a moment, run `preview` and glance at the HTML to confirm it was read
+   correctly.
+3. At the end of the period, run `period-report` and keep the two files.
+4. Run `kasra-plan` then `kasra-submit` for the days the report shows as missing, and
+   approve them.
+
+### 9. When something looks wrong
+
+| Symptom | What it means | What to do |
+| --- | --- | --- |
+| A day appears as *incomplete data* | The program found only one clock that day, for example an entry with no exit yet | Post the missing note in the channel and run `preview` again |
+| A day appears as *current day, still open* | Today is not finished, so it is deliberately left out of the totals | Nothing; it is handled tomorrow |
+| `stage=write; error_type=TimeoutError` | Kasra did not answer the save form in time; no document was created | Read the document list again later before retrying, so you never create a duplicate |
+| The chat read fails with an authentication error | `GOFT_TOKEN` is missing, expired, or wrong | Create a new token in Mattermost and export it again |
+| Days are attributed to the wrong day | You wrote an exit on a later day than the work | This is supported; check the exit is written after the entry it belongs to |
 
 ## Install and verify
 
@@ -88,6 +212,42 @@ never proposed for registration, because the day is still in progress.
   open it locally.
 - `<output>-labels.json`: every in-window own post's ID/version and proposed
   classification. `confirmed_label` stays null until human review.
+
+## Stage 3 — period report
+
+`period-report` answers one question: "what did I work, what is registered, and what is
+still missing" for a range you choose.
+
+```sh
+.venv/bin/python -m attendance_sync period-report --start 1405/05/21 --end 1405/06/20 --output artifacts/period-report
+.venv/bin/python -m attendance_sync period-report --start 1405/05/21 --end 1405/06/20 --no-kasra --output artifacts/period-report
+```
+
+- `--start` and `--end` are Jalali `YYYY/MM/DD` and are validated exactly like
+  `kasra-status`; a reversed range is refused with exit 2 and nothing written.
+- `--review <file>` reuses a preview whose window matches the range exactly instead of
+  fetching again. `--snapshot <file>` reads Kasra from a recorded file and opens no browser.
+- `--no-kasra` produces the same report with the registered columns blank, so it works
+  without any Kasra access at all.
+- `--as-of` overrides the instant used for the current day; it defaults to the run time and
+  a naive timestamp is refused. The current day is always deferred, never counted.
+
+Two files are written, both private (0600 inside a 0700 directory):
+
+- `<output>.html`: a Saturday-to-Friday calendar for exactly the requested range — not the
+  wider context window — one cell per day, colour-coded by status: green regular, orange
+  overtime, dark orange both, blue pending approval, red absence, grey rest or holiday,
+  outlined incomplete, and the current day marked open. Every value is escaped, the document
+  carries `default-src 'none'` and there are no external assets or scripts.
+- `<output>.md`: period totals and one table row per day with entry, exit, computed regular
+  and overtime, registered regular and overtime, and the status. Incomplete days are named
+  with their source ids so a blank cell is explained rather than silent.
+
+Status precedence is deliberate: work that can be evidenced from the chat outranks a Kasra
+shortfall marker, because a day the system flags while the chat shows a full working day is
+a mismatch to look at, not a day off. Suspended or absent days are only reported as such
+when no work was read for them. Pending approval outranks the work labels so a day awaiting
+an approver is never mistaken for a settled one.
 
 Reports are private: directory mode 0700, atomic file replacement with mode 0600.
 Use a dedicated output directory. Default `artifacts/` is ignored by `.gitignore`.
@@ -219,21 +379,35 @@ closed interval on the current day would be reported as a deferred span. Both
 passed the artifact verifier, including source provenance
 and complete allocated/withheld/deferred duration coverage.
 
-The regression suite passes 186 tests: the 126 stage-one tests plus stage-two tests
-covering Kasra reconciliation, the dry-run-by-default writer, the approval gate (missing,
-wrong and stale approval codes are all refused), the payload/description rules and the new
-CLI subcommands. Every correction in this cycle started
-from an observed failure: the date-context annotation, the corrections file and
-current-day handling in the CLI, and the daily-summary display of deferred work.
-Earlier regressions still cover multi-marker technical prose, unresolved-day
-quota blocking, partial overnight withholding, and immutable source evidence.
-These are observed snapshots, not hardcoded expectations.
+The regression suite passes 232 tests: the stage-one parser and provenance tests, the
+stage-two tests covering Kasra reconciliation, the dry-run-by-default writer and the
+approval gate (missing, wrong and stale approval codes are all refused), plus this cycle's
+pairing edge cases and the period report. Headline behaviours now pinned by tests:
+
+- an exit closes the latest earlier unmatched entry, and a new entry never closes the
+  previous one;
+- a pair decided by anything other than clock order stays in review and drags its
+  counterpart with it, so no interval is ever allocated with a missing side;
+- a day holding a single clock becomes an unresolved remainder that blocks its own day and
+  names its source ids instead of quietly disappearing;
+- the requested range decides the report's cells, not the 14-day context the pipeline
+  fetched for boundary pairing;
+- the period report can never treat a Kasra shortfall marker as stronger evidence than work
+  read from the chat, and the current day is always deferred rather than counted.
+
+Every correction in this cycle started from an observed failure, including an exit posted
+on a later day than the work it belongs to, and a status label that contradicted the
+minutes printed next to it. Earlier regressions still cover multi-marker technical prose,
+unresolved-day quota blocking, partial overnight withholding, and immutable source
+evidence. These are observed snapshots, not hardcoded expectations.
 
 Remaining work: reconciliation and submission are run on demand; there is no scheduler or
 service in this repository, and the approval code must be read and typed for every write.
-Two review suggestions are still open: surfacing non-blocking interval warnings
-(`claim_ahead_of_post`) in the daily summary, and flagging a day whose missing minutes cannot
-be explained by the readable document coverage. The unverified boundary cases are listed in
+An exit written on a later working day is not always attributed to the day it belongs to,
+which is the first thing to fix before any automatic submission. Two review suggestions are
+still open: surfacing non-blocking interval warnings (`claim_ahead_of_post`) in the daily
+summary, and flagging a day whose missing minutes cannot be explained by the readable
+document coverage. The unverified boundary cases are listed in
 `docs/kasra-contract.md` (§9), including an interval that ends exactly at midnight.
 
 ## License

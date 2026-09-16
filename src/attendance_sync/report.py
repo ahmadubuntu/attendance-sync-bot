@@ -39,8 +39,15 @@ def build_report(posts, own_id, start, end, *, corrections=None, as_of=None):
     for event in paired:
         event['submission_eligible'] = False
         if (event['kind'] == 'in' and event['date'] == current_day
-                and event['reasons'] == ['unmatched_entry']):
+                and set(event['reasons']) <= {'unmatched_entry', 'unmatched_event'}):
             event.update(status='open_day', reasons=[], information=['current_day_unfinished'])
+    # Days that hold one clock only must reach the report as incomplete rather than blank. The
+    # reason set stays the legacy one for entries so the current-day reading above still applies.
+    for event in paired:
+        if event['kind'] == 'in' and event['pairing_state'] == 'incomplete_day':
+            event.setdefault('information', [])
+            if 'incomplete_day' not in event['information']:
+                event['information'].append('incomplete_day')
     intervals = build_intervals(paired, ranges)
     source_by_id = {e['event_id']: e for e in paired} | {r['range_id']: r for r in ranges}
     for interval in intervals:
@@ -185,26 +192,39 @@ def render_html(report):
     return ''.join(content)+'</html>'
 
 
-def write_reports(report, output):
+def validate_private_output(output):
+    """Reject an output path that is not inside a dedicated private directory."""
     output = Path(output)
     parent = output.parent
     if parent == Path('.') or parent.is_symlink():
         raise ValueError('Use a dedicated private output directory')
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     parent.chmod(0o700)
+    return output
+
+
+def write_private_text(path, text, *, prefix='.preview-'):
+    """Write one owner-only file atomically: a reader sees the whole document or nothing."""
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix=prefix, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return path
+
+
+def write_reports(report, output):
+    output = validate_private_output(output)
     paths = [Path(str(output)+'.json'), Path(str(output)+'.html'), Path(str(output)+'-labels.json')]
     texts = [json.dumps(report, ensure_ascii=False, indent=2), render_html(report),
              json.dumps({'status':'unconfirmed_system_proposals','labels':report['labels']},ensure_ascii=False,indent=2)]
-    for path, text in zip(paths,texts):
-        fd, temporary = tempfile.mkstemp(prefix='.preview-', dir=parent)
-        try:
-            with os.fdopen(fd,'w',encoding='utf-8') as stream:
-                os.fchmod(stream.fileno(),0o600)
-                stream.write(text)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary,path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+    for path, text in zip(paths, texts):
+        write_private_text(path, text)
     return paths
