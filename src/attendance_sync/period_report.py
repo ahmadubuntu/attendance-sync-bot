@@ -130,10 +130,15 @@ def _kasra_day(kasra, jalali):
                    and document.get('minutes'))
     registered_regular, registered_overtime = total(CREDIT_TYPE_REGULAR, STATUS_APPROVED), total(CREDIT_TYPE_OVERTIME, STATUS_APPROVED)
     pending_regular, pending_overtime = total(CREDIT_TYPE_REGULAR, STATUS_PENDING), total(CREDIT_TYPE_OVERTIME, STATUS_PENDING)
+    # A day Kasra covers differently from the computed runs (a manual document overlapping the
+    # day at other hours) never settles silently: it is named in the report so the user can
+    # tell HR. The flag is the gap between what the day holds and what the chat evidences.
+    day_minutes = sum(document.get('minutes') or 0 for document in documents)
     return {'marker': entry.get('day_type'), 'registered_regular_minutes': registered_regular,
             'registered_overtime_minutes': registered_overtime,
             'pending_regular_minutes': pending_regular, 'pending_overtime_minutes': pending_overtime,
-            'documents': [document['doc_id'] for document in documents]}
+            'documents': [document['doc_id'] for document in documents],
+            'coverage_minutes': day_minutes}
 
 
 def _status(local_date, regular, overtime, kasra_row, unresolved, open_day):
@@ -183,6 +188,13 @@ def build_period(report, *, start, end, kasra=None, kasra_check='performed'):
                        for event in report['events'])
         status = _status(local_date, regular, overtime, kasra_row, unresolved, open_day)
         incomplete = status == 'incomplete' and not (regular or overtime)
+        # The day never settles silently when what Kasra holds does not match what the chat
+        # evidences: either minutes are missing entirely, or the coverage disagrees. Both are
+        # named in the report so the user can take the day to HR.
+        settled = (kasra is None or
+                   (kasra_row['registered_regular_minutes'] + kasra_row['pending_regular_minutes']
+                    + kasra_row['registered_overtime_minutes'] + kasra_row['pending_overtime_minutes']
+                    >= regular + overtime))
         days.append({'local_date': local_date, 'jalali_date': jalali,
                      'weekday': jdatetime.date.fromgregorian(date=date.fromisoformat(local_date)).strftime('%A'),
                      'entry': entry, 'exit': exit_clock,
@@ -192,7 +204,7 @@ def build_period(report, *, start, end, kasra=None, kasra_check='performed'):
                      'pending_regular_minutes': kasra_row['pending_regular_minutes'],
                      'pending_overtime_minutes': kasra_row['pending_overtime_minutes'],
                      'kasra_day_type': kasra_row['marker'], 'kasra_documents': kasra_row['documents'],
-                     'status': status, 'incomplete': incomplete,
+                     'status': status, 'incomplete': incomplete, 'not_settled': not settled and status != 'open_day',
                      'unresolved': unresolved, 'evidence': _evidence(report, local_date),
                      'source_ids': sorted({event['event_id'] for event in unresolved})})
     work = ('regular', 'overtime', 'both')
@@ -212,6 +224,7 @@ def build_period(report, *, start, end, kasra=None, kasra_check='performed'):
             'timezone': 'Asia/Tehran', 'today': today, 'kasra_check': kasra_check if kasra is not None else 'not_performed',
             'week_columns': list(WEEK_COLUMNS), 'totals': totals, 'days': days,
             'incomplete_days': [row['jalali_date'] for row in days if row['incomplete']],
+            'not_settled_days': [row['jalali_date'] for row in days if row['not_settled']],
             'review_event_ids': sorted({event['event_id'] for row in days for event in row['unresolved']})}
 
 
@@ -348,6 +361,22 @@ def render_markdown(period):
                              + ', '.join(event['reasons']) + '.')
     if period['review_event_ids']:
         lines += ['', 'Source ids of the unresolved events: ' + ', '.join(f'`{i}`' for i in period['review_event_ids']) + '.']
+    lines += ['', '## Days not fully settled with Kasra', '']
+    unsettled = [row for row in period['days'] if row['not_settled']]
+    if not unsettled:
+        lines.append('None: for every day of the range, Kasra holds at least the minutes the chat '
+                     'evidences.')
+    else:
+        lines.append('These days are not fully registered. Tell HR about them when you take the '
+                     'monthly report:')
+        lines.append('')
+        for row in unsettled:
+            held = ((row['registered_regular_minutes'] or 0) + (row['registered_overtime_minutes'] or 0)
+                    + (row['pending_regular_minutes'] or 0) + (row['pending_overtime_minutes'] or 0))
+            computed = row['regular_minutes'] + row['overtime_minutes']
+            lines.append(f'- {row["local_date"]} / {row["jalali_date"]}: computed '
+                         f'{label_from_minutes(computed)}, Kasra holds {label_from_minutes(held)} '
+                         f'(documents {", ".join(row["kasra_documents"]) or "none"}).')
     return '\n'.join(lines) + '\n'
 
 

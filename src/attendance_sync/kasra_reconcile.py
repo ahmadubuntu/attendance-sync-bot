@@ -422,7 +422,14 @@ def _covered_intervals(jalali_day, documents, category, zone):
 
 
 def build_payloads(result, *, person_id, description=DEFAULT_DESCRIPTION):
-    """Build one credit document per unregistered run; never rounds minutes."""
+    """Build one credit document per unregistered run; never rounds minutes.
+
+    When the readable document coverage does not explain the missing minutes (a manually
+    created document can overlap the day differently from the computed runs), the uncovered
+    spans are still registered -- the user confirmed they are real work -- and every payload
+    of that day carries a ``coverage_mismatch`` warning so the period report can name the day
+    as not fully settled for HR.
+    """
     payloads = []
     for day in result.get('days') or ():
         for category in CATEGORIES:
@@ -435,12 +442,15 @@ def build_payloads(result, *, person_id, description=DEFAULT_DESCRIPTION):
             zone = datetime.fromisoformat(runs[0]['start_at']).tzinfo
             covered = _covered_intervals(day['jalali_date'], day['documents'], category, zone)
             missing_runs = subtract_intervals(runs, covered)
-            if sum(run['minutes'] for run in missing_runs) != missing:
-                continue  # the readable coverage does not explain the missing minutes: do not guess
+            mismatch = sum(run['minutes'] for run in missing_runs) != missing
+            if mismatch and not missing_runs:
+                continue  # nothing uncovered to register: the mismatch is not ours to guess
             for run in missing_runs:
                 start = datetime.fromisoformat(run['start_at'])
                 end = datetime.fromisoformat(run['end_at'])
                 warnings = []
+                if mismatch:
+                    warnings.append('coverage_mismatch')
                 if start.date() != end.date() and end.time() == time.min:
                     warnings.append('ends_at_midnight')
                 payloads.append({
