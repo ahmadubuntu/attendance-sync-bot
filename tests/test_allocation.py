@@ -27,5 +27,5 @@ def test_allocation_preserves_overtime_and_daily_quota():
     intervals = [resolve('a', ['a'], '2026-09-12', '23:00', '04:00', 'activity_range', True, [], 'ready'),
                  resolve('b', ['b'], '2026-09-13', '08:20', '19:40', 'paired_events', False, [], 'ready')]
     segments = allocate(intervals)
-    assert [(s['category'],s['duration_minutes']) for s in segments] == [('overtime_remote',60),('overtime_remote',240),('regular_remote',540),('overtime_remote',140)]
+    assert [(s['category'],s['duration_minutes']) for s in segments] == [('overtime_remote',60),('overtime_remote',239),('regular_remote',540),('overtime_remote',140)]
     assert segments[2]['end_at'] == '2026-09-13T17:20:00+03:30'

@@ -15,6 +15,8 @@ the first (earlier) entry*. Four consequences are implemented here:
 """
 from copy import deepcopy
 from datetime import date
+from .misdated import resolve_misdated_exit
+from .intervals import split_midnights
 from .parser import WEEKDAYS
 from .normalize import normalize
 
@@ -111,8 +113,18 @@ def pair(events):
         event['reasons'] = [r for r in event['reasons'] if r not in ('post_date_assumed', 'unknown_weekday')]
         event['status'] = 'review' if event['reasons'] else 'ready'
         if event['raw_date'] and entry['date'] and event['source_date'] != entry['date']:
-            event['date'] = event['source_date']
-            flag(event, 'explicit_exit_date_conflict')
+            # The note may name a later day simply because it was written later. The clocks
+            # decide: a plausible single shift on the named day is kept, otherwise the work
+            # belongs to the entry's day and the late date stays as evidence.
+            day, reason = resolve_misdated_exit(entry, event, event['source_date'])
+            if day:
+                event['date'] = day
+                if reason:
+                    event['reasons'].append(reason)
+                event['status'] = 'review' if event['reasons'] else 'ready'
+            else:
+                event['date'] = event['source_date']
+                flag(event, 'explicit_exit_date_conflict')
         # An entry whose clock or date is not trustworthy cannot define an interval on its own.
         # The decision is judged on the entry's own reasons before the exit flags are copied
         # back onto it, otherwise the mark would always be present and mean nothing. A weekday

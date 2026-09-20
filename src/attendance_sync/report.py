@@ -128,6 +128,36 @@ def build_report(posts, own_id, start, end, *, corrections=None, as_of=None):
     return report
 
 
+def render_date_discrepancies_markdown(report):
+    """A named section listing every date the user must look at, with what was used instead.
+
+    The user asked to always be told about a weekday/date mismatch so it can be fixed at the
+    source. A technical flag buried in the JSON is not telling them, so this section states, in
+    plain terms, which note disagreed, what was written, what the program used, and whether the
+    neighbouring notes support the reading.
+    """
+    rows = report['date_discrepancies']
+    lines = ['## Date mismatches', '']
+    if not rows:
+        lines += ['None: every note that states a day agrees with the date it states.', '']
+        return lines
+    lines += ['These notes disagree with themselves. Nothing was silently corrected; the program used the',
+              'date named in the Used column. Fix the note in the channel and re-run to clear the entry.',
+              '', '| Posted (local) | Post | Written day | Written date | Used | Neighbours agree | Resolution |',
+              '| --- | --- | --- | --- | --- | --- | --- |']
+    for row in sorted(rows, key=lambda item: item['posted_at']):
+        post_id = (row.get('next_entry') or row.get('previous_entry') or {}).get('event_id', '')
+        post_id = post_id.split(':')[0]
+        lines.append('| {posted} | `{post}` | {weekday} | {raw} | {used} | {support} | {resolution} |'.format(
+            posted=row.get('posted_local_date') or '', post=post_id,
+            weekday=row.get('raw_weekday') or '-', raw=row.get('raw_date') or '-',
+            used=row.get('suggested_date') or 'not determined',
+            support='yes' if row.get('neighbor_support') else 'no',
+            resolution=row.get('resolution') or ''))
+    lines.append('')
+    return lines
+
+
 def render_html(report):
     content = ['<!doctype html><html lang="en"><meta charset="utf-8">',
         '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">',
@@ -177,6 +207,22 @@ def render_html(report):
     deferred = sum(row.get('deferred', 0) for row in days.values())
     content.append(f'<tr><th>Total</th><td></td><td>{regular}</td><td>{overtime}</td><td>{regular + overtime}</td><td>{withheld}</td><td>{deferred}</td><td></td></tr></table>')
     summary = {k:v for k,v in report.items() if not isinstance(v,list)}
+    content.append('<h2>Date mismatches</h2>')
+    if not report['date_discrepancies']:
+        content.append('<p>None: every note that states a day agrees with the date it states.</p>')
+    else:
+        content.append('<p>These notes disagree with themselves. Nothing was silently corrected; the date in '
+                       'the Used column is what the program applied. Fix the note in the channel to clear it.</p>'
+                       '<table><tr><th>Posted (local)</th><th>Post</th><th>Written day</th><th>Written date</th>'
+                       '<th>Used</th><th>Neighbours agree</th><th>Resolution</th></tr>')
+        for row in sorted(report['date_discrepancies'], key=lambda item: item['posted_at']):
+            post_id = ((row.get('next_entry') or row.get('previous_entry') or {}).get('event_id')
+                       or '').split(':')[0]
+            values = [row.get('posted_local_date') or '', post_id, row.get('raw_weekday') or '-',
+                      row.get('raw_date') or '-', row.get('suggested_date') or 'not determined',
+                      'yes' if row.get('neighbor_support') else 'no', row.get('resolution') or '']
+            content.append('<tr>' + ''.join('<td dir="auto">' + escape(str(value)) + '</td>' for value in values) + '</tr>')
+        content.append('</table>')
     content.append('<details><summary>Report metadata</summary><pre>'+escape(json.dumps(summary,ensure_ascii=False,indent=2))+'</pre></details>')
     for section in ('date_discrepancies','events','context_events','ranges','context_ranges','intervals','context_intervals','segments','allocation_blockers','withheld_spans','context_withheld_spans','deferred_spans','context_deferred_spans','ignored','labels'):
         rows = report[section]
@@ -222,9 +268,11 @@ def write_private_text(path, text, *, prefix='.preview-'):
 
 def write_reports(report, output):
     output = validate_private_output(output)
-    paths = [Path(str(output)+'.json'), Path(str(output)+'.html'), Path(str(output)+'-labels.json')]
+    paths = [Path(str(output)+'.json'), Path(str(output)+'.html'), Path(str(output)+'-labels.json'),
+             Path(str(output)+'-date-mismatches.md')]
     texts = [json.dumps(report, ensure_ascii=False, indent=2), render_html(report),
-             json.dumps({'status':'unconfirmed_system_proposals','labels':report['labels']},ensure_ascii=False,indent=2)]
+             json.dumps({'status':'unconfirmed_system_proposals','labels':report['labels']},ensure_ascii=False,indent=2),
+             '\n'.join(render_date_discrepancies_markdown(report))]
     for path, text in zip(paths, texts):
         write_private_text(path, text)
     return paths

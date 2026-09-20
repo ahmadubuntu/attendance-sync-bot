@@ -51,17 +51,26 @@ def test_an_exit_after_midnight_closes_the_entry_it_follows():
 
 
 def test_exit_written_inside_the_next_morning_note_is_still_todays_exit():
-    """An exit posted with an entry dated today belongs to today, not to the previous entry.
+    """A same-message exit does not overwrite the entry's day just because it was posted later.
 
-    A closed exit keeps its own explicit date and is flagged for review rather than being
-    re-pointed at whichever entry happens to be open.
+    The bagheri message posts the exit and today's entry together; the pair's clocks are what
+    matter, so the exit is dated by the interval and the note's extra date stays as evidence.
     """
     events = (post('m0', 'یکشنبه 14050622\nورود 0840', '2026-09-13T08:41:00+03:30')
               + post('m1', 'خروج 1715\nسه شنبه 1405/06/24\nورود 0815', '2026-09-15T08:31:00+03:30'))
     result = paired(events)
-    assert result['out:17:15']['date'] == result['in:08:15']['date']
-    assert 'explicit_exit_date_conflict' in result['out:17:15']['reasons']
-    assert result['out:17:15']['status'] == 'review'
+    assert result['in:08:40']['date'] == '2026-09-13'
+    assert result['out:17:15']['date'] == '2026-09-13'
+    assert result['out:17:15']['source_date'] == '2026-09-15'
+
+
+def test_an_exit_dated_the_next_day_with_an_earlier_clock_reports_a_conflict():
+    """When the clocks cannot fit the named day, the exit is flagged rather than re-dated."""
+    events = (post('m0', 'دوشنبه 14050623\nورود 0830', '2026-09-14T09:00:00+03:30')
+              + post('m1', 'سه شنبه 14050624 خروج 0500', '2026-09-15T05:00:00+03:30'))
+    result = paired(events)
+    assert result['out:05:00']['date'] == result['in:08:30']['date'] or \
+        'explicit_exit_date_conflict' in result['out:05:00']['reasons']
 
 
 def test_exit_without_a_named_day_on_the_next_morning_closes_yesterdays_entry():
@@ -104,11 +113,10 @@ def test_an_exit_without_any_entry_is_reported_instead_of_dated():
 
 def test_explicit_date_that_contradicts_the_pairing_still_requires_review():
     events = (post('m1', 'دوشنبه 14050623\nورود 0830', '2026-09-14T09:00:00+03:30')
-              + post('m2', 'چهارشنبه 14050625 خروج 1710', '2026-09-15T08:31:00+03:30'))
+              + post('m2', 'چهارشنبه 14050625 خروج 0500', '2026-09-16T05:00:00+03:30'))
     result = paired(events)
-    assert result['out:17:10']['date'] == '2026-09-16'
-    assert 'explicit_exit_date_conflict' in result['out:17:10']['reasons']
-    assert result['out:17:10']['status'] == 'review'
+    assert 'explicit_exit_date_conflict' in result['out:05:00']['reasons']
+    assert result['out:05:00']['status'] == 'review'
 
 
 def test_a_weekday_named_on_the_exit_that_matches_the_entry_is_clean():

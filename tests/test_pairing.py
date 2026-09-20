@@ -28,10 +28,19 @@ def test_conflicting_entry_propagates():
 
 
 def test_explicit_exit_date_not_overwritten():
+    """The exit's own date wins when the clocks only fit that day."""
     from attendance_sync.pairing import pair
     result = pair(events('14050617 ورود 0800', '14050616 خروج 1700'))
     assert result[-1]['date'] == '2026-09-07'
-    assert 'explicit_exit_date_conflict' in result[-1]['reasons']
+    assert 'exit_named_day_recent' in result[-1]['reasons']
+
+
+def test_late_note_exit_stays_on_the_entry_day():
+    """An exit whose named date is later than its clocks fit belongs to the entry's day."""
+    from attendance_sync.pairing import pair
+    result = pair(events('14050623 ورود 0830', '14050624 خروج 1710'))
+    assert result[-1]['date'] == '2026-09-14'
+    assert 'late_note_same_day_work' in result[-1]['reasons']
 
 
 def test_same_timestamp_cross_post_review():

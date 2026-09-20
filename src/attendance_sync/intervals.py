@@ -1,6 +1,14 @@
-"""Resolved half-open intervals and derived midnight boundaries."""
+"""Resolved half-open intervals and derived midnight boundaries.
+
+A shift that crosses midnight is split so the earlier day keeps 23:59 and the next day owns
+00:01 onward, as the user confirmed. The single minute at 00:00 is left unassigned on purpose:
+the attendance system refuses 00:00 as an end clock, so a night part must never be reported as
+starting at midnight. The accepted cost is one unregistered minute per midnight crossed.
+"""
 from datetime import datetime, time, timedelta
 from .parser import TEHRAN
+
+NIGHT_START = time(0, 1)
 
 
 def split_midnights(start, end):
@@ -13,6 +21,8 @@ def split_midnights(start, end):
         stop = min(end, boundary)
         parts.append((start, stop))
         start = stop
+        if stop == boundary and start < end:
+            start = datetime.combine(start.date(), NIGHT_START, TEHRAN)
     return parts
 
 

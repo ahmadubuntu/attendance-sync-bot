@@ -13,7 +13,9 @@ def test_overnight_interval_and_midnight_split():
     assert interval['end_day_offset'] == 1
     assert interval['end_at'] == '2026-09-13T04:00:00+03:30'
     parts = split_midnights(datetime.fromisoformat(interval['start_at']), datetime.fromisoformat(interval['end_at']))
-    assert [int((b-a).total_seconds())//60 for a,b in parts] == [60,240]
+    # The earlier day keeps up to 23:59 and the next day owns 00:01 onward, so the minute at
+    # midnight is deliberately left unassigned.
+    assert [int((b-a).total_seconds())//60 for a,b in parts] == [60,239]
     assert interval['explicit_overtime']
 
 

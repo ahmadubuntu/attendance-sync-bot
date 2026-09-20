@@ -69,7 +69,7 @@ def test_ineligible_review_evidence_cannot_block_day(text):
     assert report['allocation_blockers'] == []
 
 
-@pytest.mark.parametrize('overnight,expected,allocated,withheld', [(True, 300, 240, 60), (False, 600, 0, 600)])
+@pytest.mark.parametrize('overnight,expected,allocated,withheld', [(True, 299, 239, 60), (False, 600, 0, 600)])
 def test_withheld_spans_conserve_duration_and_show_daily_review(overnight, expected, allocated, withheld):
     from copy import deepcopy
     import re
@@ -97,7 +97,7 @@ def test_withheld_spans_conserve_duration_and_show_daily_review(overnight, expec
     assert f'<td>{withheld}</td>' in daily and 'Withheld min' in compact
     if overnight:
         next_day = next(row for row in re.findall(r'<tr>.*?</tr>', compact) if '2026-09-13' in row)
-        assert '<td>240</td>' in next_day
+        assert '<td>239</td>' in next_day
         assert 'daily_quota_blocked_by_review' not in next_day
     assert rows == before
 

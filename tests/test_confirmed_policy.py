@@ -74,7 +74,7 @@ def test_unanchored_overnight_completed_morning_uses_previous_start_day():
     assert activity['date'] == '2026-09-12'
     assert activity['date_basis'] == 'posted_clock_overnight_inferred'
     assert activity['status'] == 'ready'
-    assert [s['duration_minutes'] for s in result['segments']] == [60, 240]
+    assert [s['duration_minutes'] for s in result['segments']] == [60, 239]
     assert all(s['category'] == 'overtime_remote' for s in result['segments'])
 
 
@@ -105,7 +105,7 @@ def test_current_closed_work_is_deferred_and_overnight_previous_day_stays_alloca
                      post('شنبه کار 0800-0900', '2026-09-12T09:00:00+03:30', 'day')],
                     as_of=datetime.fromisoformat('2026-09-12T10:00:00+03:30'))
     assert [(s['local_date'], s['duration_minutes']) for s in result['segments']] == [('2026-09-11', 60)]
-    assert [s['duration_minutes'] for s in result['deferred_spans']] == [240, 60]
+    assert [s['duration_minutes'] for s in result['deferred_spans']] == [239, 60]
     assert all(s['submission_eligible'] is False for s in result['deferred_spans'])
     assert result['withheld_spans'] == [] and result['review_count'] == 0
     for item in result['intervals']:
