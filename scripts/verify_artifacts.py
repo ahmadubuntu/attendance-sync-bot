@@ -1,9 +1,13 @@
 """Verify local artifact invariants without printing private source text."""
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import stat
+import sys
+
+sys.path.insert(0, str(Path('src')))
+from attendance_sync.intervals import split_midnights  # noqa: E402
 
 for stem in ('review', 'rolling-review'):
     root = Path('artifacts')
@@ -55,13 +59,20 @@ for stem in ('review', 'rolling-review'):
             assert not parts and not withheld and not deferred and interval['withheld_minutes'] is None
             continue
         a, b = map(datetime.fromisoformat, (interval['start_at'], interval['end_at']))
-        assert interval['expected_minutes'] == int((b-a).total_seconds())//60
+        parts_span = sum(int((end-start).total_seconds())//60
+                         for start, end in split_midnights(a, b))
+        assert interval['expected_minutes'] == parts_span
         assert interval['withheld_minutes'] == sum(s['duration_minutes'] for s in withheld)
         assert interval['deferred_minutes'] == sum(s['duration_minutes'] for s in deferred)
         assert interval['expected_minutes'] == interval['allocated_minutes'] + interval['withheld_minutes'] + interval['deferred_minutes']
         cursor = a
         for part in sorted(parts + withheld + deferred, key=lambda p: p['start_at']):
-            assert datetime.fromisoformat(part['start_at']) == cursor
+            start_at = datetime.fromisoformat(part['start_at'])
+            # The minute at midnight belongs to no day, so a night part starts one minute after
+            # the boundary the previous part ended on.
+            same_boundary = start_at == cursor
+            night_skip = (start_at - cursor) == timedelta(minutes=1) and start_at.time().isoformat() == '00:01:00'
+            assert same_boundary or night_skip, (part['start_at'], cursor.isoformat())
             cursor = datetime.fromisoformat(part['end_at'])
         assert cursor == b
     event_ids = {e['event_id'] for e in report['events'] + report['context_events']}

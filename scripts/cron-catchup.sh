@@ -56,9 +56,26 @@ EOF
 )
   echo "payloads: $PAYLOADS"
   [ "$PAYLOADS" = "0" ] && { echo "nothing missing; done"; exit 0; }
-  CODE=$("$PY" -m attendance_sync kasra-submit --plan var/cron-plan.json | tail -1 | "$PY" -c "import json,sys; print(json.loads(sys.stdin.read())['approval_code'])")
-  echo "approval code: $CODE"
-  "$PY" -m attendance_sync kasra-submit --plan var/cron-plan.json --confirm --approve "$CODE" --timeout-ms 300000
-  echo "submit exit: $?"
+  # Submit one payload at a time: a single browser session that saves several documents in a
+  # row drags a modal overlay across saves and the read-back fails. One session per payload
+  # is slower but every document is read back and recorded.
+  "$PY" - <<'EOF' >> "$LOG" 2>&1
+import json, subprocess, sys
+plan = json.load(open('var/cron-plan.json', encoding='utf-8'))
+for payload in plan['payloads']:
+    single = {'payloads': [payload]}
+    with open('var/cron-single.json', 'w') as fh:
+        json.dump(single, fh)
+    dry = subprocess.run([sys.executable, '-m', 'attendance_sync', 'kasra-submit', '--plan', 'var/cron-single.json'], capture_output=True, text=True)
+    out = dry.stdout.strip().split('\n')[-1]
+    try:
+        code = json.loads(out)['approval_code']
+    except Exception:
+        print('dry run failed for', payload['day'], payload['start_time'], '-', payload['end_time'])
+        print('  ', out)
+        continue
+    subprocess.run([sys.executable, '-m', 'attendance_sync', 'kasra-submit', '--plan', 'var/cron-single.json', '--confirm', '--approve', code, '--timeout-ms', '300000'], check=False)
+    print('submitted', payload['day'], payload['start_time'], '-', payload['end_time'], 'code', code)
+EOF
   echo "=== run end ==="
 } >> "$LOG" 2>&1

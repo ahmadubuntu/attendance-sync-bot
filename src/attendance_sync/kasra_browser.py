@@ -263,6 +263,7 @@ class KasraBrowser:
                 const el = document.getElementById(args.id);
                 if (el) { el.value = args.value; el.dispatchEvent(new Event('change', {bubbles: true})); }
             }""", {'id': DOCUMENTS_PERIOD_SELECT, 'value': value})
+            self._dismiss_overlay()
             frame.click('#OToolBar_BtnFilter')
             self.page.wait_for_timeout(9000)
             table = self._grid(frame, None, DOCUMENTS_GRID_CLASS)
@@ -274,6 +275,48 @@ class KasraBrowser:
                 seen.add(key)
                 rows.append(row)
         return {'columns': columns, 'rows': rows}
+
+    def _dismiss_overlay(self):
+        """Dismiss any open Kasra modal overlay so it cannot intercept the next click.
+
+        After a save Kasra briefly shows ``kasra-modal-overlay in``; clicks on toolbar buttons
+        (such as the filter button used by :meth:`read_documents`) are then swallowed. Remove
+        the overlay from the DOM directly, since it does not always leave on its own.
+        """
+        if self.page is None:
+            return
+        try:
+            self.page.evaluate("""() => {
+                const el = document.querySelector('.kasra-modal-overlay.in');
+                if (el) el.parentNode.removeChild(el);
+            }""")
+        except Exception:
+            pass
+
+    def _dismiss_modal(self):
+        """Remove any open Kasra modal dialog so it cannot intercept the next click.
+
+        Some saves open a ``kasra-modal-dialog`` (a confirmation or an error toast) that sits
+        above the save button and swallows the click. Drop only the dialogs that do NOT host
+        the active credit form -- the form itself is also a modal dialog.
+        """
+        if self.page is None:
+            return
+        try:
+            prefix = self.page.evaluate("""() => {
+                const field = Array.from(document.querySelectorAll('input,textarea'))
+                    .find(node => /EnterCreditNameSpace_Description$/.test(node.id));
+                return field ? field.id.replace(/Description$/, '') : null;
+            }""")
+            self.page.evaluate("""(args) => {
+                const keep = args.prefix ? document.getElementById(args.prefix + 'BtnSave') : null;
+                for (const el of Array.from(document.querySelectorAll('.kasra-modal-dialog'))) {
+                    if (keep && el.contains(keep)) continue;  // the active form: do not remove
+                    el.parentNode.removeChild(el);
+                }
+            }""", {'prefix': prefix})
+        except Exception:
+            pass
 
     def _month_labels(self, start, end):
         months = []
@@ -343,7 +386,21 @@ class KasraBrowser:
                 if (el.tagName === 'SELECT') { el.dispatchEvent(new Event('change', {bubbles: true})); }
             }
         }""", values)
-        self.page.click(f'#{prefix}BtnSave')
+        self._dismiss_overlay()
+        self._dismiss_modal()
+        try:
+            self.page.click(f'#{prefix}BtnSave', timeout=30000)
+        except Exception:
+            # Capture what modal/dialog is blocking the save, then re-raise.
+            diag = self.page.evaluate('''() => {
+                const modals = Array.from(document.querySelectorAll('.kasra-modal-dialog')).map(el => ({
+                    hasSave: !!el.querySelector('[id*=BtnSave]'),
+                    text: (el.innerText || '').replace(/\\s+/g, ' ').slice(0, 200),
+                }));
+                const overlay = !!document.querySelector('.kasra-modal-overlay.in');
+                return {modals, overlay};
+            }''')
+            raise KasraError(f'save click blocked: {diag!r}') from None
         self.page.wait_for_timeout(12000)
         return {'mode': 'confirmed', 'written': True, 'document_id': None, 'status_id': None,
                 'payload': payload, 'note': 'read back the document list to record the document id'}
