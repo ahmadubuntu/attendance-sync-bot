@@ -12,7 +12,20 @@ from pathlib import Path
 import pytest
 
 from attendance_sync.kasra_reconcile import CREDIT_TYPE_OVERTIME, CREDIT_TYPE_REGULAR, STATUS_APPROVED, STATUS_PENDING
-from test_parser import post
+from test_parser import dated
+from test_parser import post as _post
+
+
+def post(text, stamp='2026-09-08T08:00:00+00:00', ident='p'):
+    """A message that names a day, the way the fixtures in this file all assume.
+
+    A bare weekday used to be enough to name the day, read off the posting clock and therefore
+    dependent on the machine's timezone. It is not any more: only a date written in the message
+    decides the day. `dated` writes in the date each fixture's weekday stands for, so these
+    tests assert on a real day. A fixture that genuinely needs an undated note calls `_post`.
+    """
+    return _post(dated(text), stamp, ident)
+
 
 # 1405/06/21 is Saturday 2026-09-12; 1405/06/27 is Friday 2026-09-18.
 SATURDAY, WEDNESDAY, THURSDAY, FRIDAY = '2026-09-12', '2026-09-16', '2026-09-17', '2026-09-18'
@@ -73,7 +86,10 @@ def test_a_full_pair_day_shows_both_clocks_and_regular_minutes():
 
 
 def test_a_day_with_only_one_clock_is_incomplete_and_explained():
-    report = report_for(rows_for(('خروج شنبه 1700', '2026-09-12T17:00:00+03:30', 'lonely'),))
+    # The exit has to name a day the channel also states, or there is nothing to resolve its
+    # weekday against and it stays undated -- which is a different test, and a stricter one.
+    report = report_for(rows_for(('شنبه 14050621\nورود 0810 خروج 1710', '2026-09-12T17:10:00+03:30', 'both'),
+                                 ('شنبه 14050621\nخروج شنبه 1900', '2026-09-12T19:05:00+03:30', 'lonely')))
     from attendance_sync.period_report import build_period, render_markdown
     period = build_period(report, start='1405/06/21', end='1405/06/27')
     day = next(row for row in period['days'] if row['local_date'] == SATURDAY)

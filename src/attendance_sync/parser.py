@@ -12,6 +12,16 @@ WEEKDAY = re.compile(r'یک ?شنبه|دو ?شنبه|سه ?شنبه|چهار ?ش
 DATE = re.compile(r'(?<!\d)(?:1[34]\d{6}|1[34]\d{2}[/.-]\d{1,2}[/.-]\d{1,2})(?!\d)')
 MARKER = re.compile(r'(?<!\w)(ورود|خروج)(?!\w)')
 CLOCK = re.compile(r'(?<![\d:])(?:\d{1,2}:\d{2}|\d{4})(?![\d:])')
+# Wording that puts `ورود`/`خروج` and a four-digit number into a technical sense rather than
+# an attendance one. Used to disqualify the line before a marker is read as a clock.
+TECHNICAL_PROSE = re.compile(
+    r'نسخه|ورود کاربر|خروج کاربر|لاگین|لاگ ?اوت|login|logout|sign ?in|sign ?out'
+    r'|version|release|deploy|commit|branch|api|endpoint|database|server'
+    r'|باگ|bug|خطای سیستم|اختلال|مشکل ورود|مشکل خروج', re.I)
+# Filler the user writes between the marker and the clock: `ورود ساعت 0900`,
+# `ورود حدوداکنون 0700`. These carry no clock of their own, so they are stripped before the
+# clock is read rather than being allowed to hide it.
+CLOCK_FILLER = re.compile(r'ساعت\s*|حدوداکنون|حدود\s*|تقریبا\s*|حدودی\s*')
 
 
 def explicit_date(token):
@@ -65,17 +75,21 @@ def parse_post(post):
             basis = 'explicit_jalali'
             if wd is not None and day.weekday() != wd:
                 reasons.append('weekday_date_conflict')
-                suggestion = local - timedelta(days=(local.weekday()-wd)%7)
         except ValueError:
             reasons.append('invalid_date')
         if len(set(dates)) > 1:
             reasons.append('multiple_dates')
     elif wd is not None:
-        day = local - timedelta(days=(local.weekday()-wd)%7)
-        basis = 'weekday_inferred'
+        # A weekday with no date beside it names a weekday, not a day. Which day that was
+        # comes from the channel's own written dates, resolved later by weekday_resolve --
+        # never from the posting instant. `create_at` is a UTC moment: read on a New York
+        # clock the very same note looks like the previous day, so deriving the day from it
+        # makes the result depend on where the bot happens to run.
+        day = None
+        basis = 'weekday_only'
     else:
-        day, basis = local, 'post_date_assumed'
-        reasons.append('unknown_weekday' if raw_weekday else 'post_date_assumed')
+        day, basis = None, 'undated'
+        reasons.append('unknown_weekday' if raw_weekday else 'no_date_in_text')
     candidate_days = {day.isoformat()} if day else set()
     if suggestion:
         candidate_days.add(suggestion.isoformat())
@@ -84,11 +98,12 @@ def parse_post(post):
             candidate_days.add(explicit_date(token).isoformat())
         except ValueError:
             pass
-    if reasons:
-        for weekday in weekdays:
-            candidate_wd = WEEKDAYS.get(weekday.replace(' ', ''))
-            if candidate_wd is not None:
-                candidate_days.add((local - timedelta(days=(local.weekday()-candidate_wd)%7)).isoformat())
+    # A weekday on its own adds no candidate day here. Which day of that weekday was meant is
+    # decided in `weekday_resolve`, against the dates the channel states in writing -- not
+    # against the posting instant. Guessing "the Tuesday of the week this note was sent in"
+    # would put a day in the candidate set that depends on where the bot runs, and a run on a
+    # New York clock would offer the Friday before as a candidate for a Tuesday.
+    # `weekday_resolve` fills `candidate_dates` where the text genuinely leaves a choice.
     events = []
     fenced = False
     for line_index, raw_line in enumerate(post['message'].splitlines()):
@@ -99,16 +114,35 @@ def parse_post(post):
         if fenced:
             continue
         markers = list(MARKER.finditer(line))
+        # Prose that merely contains the word. `بررسی مشکل ورود کاربران در نسخه 1700` is a
+        # bug report: `ورود` is part of "user login" and `1700` is a version number. Read as
+        # attendance it becomes a real entry at 17:00, which then pairs with a later `خروج`
+        # and files a shift nobody worked. Technical wording disqualifies the whole line, the
+        # same way it already does for work ranges.
+        if markers and TECHNICAL_PROSE.search(line):
+            markers = []
         line_event_start = len(events)
         for index, marker in enumerate(markers):
             prefix = line[:marker.start()] if index == 0 else ''
-            prefix = WEEKDAY.sub('', DATE.sub('', prefix)).strip(' >`،,:;-')
-            if prefix:
+            # Words before the marker are fine: `لپتاپ خاموش شد، فعلا خروج میزنم` is a real
+            # exit. Only a date or a weekday in front of the marker means the marker belongs
+            # to the line above (`سه شنبه 14050707 / خروج 1705`), not to this line.
+            stray = WEEKDAY.sub('', DATE.sub('', prefix)).strip(' >`،,:;-')
+            if stray and (WEEKDAY.search(prefix) or DATE.search(prefix)):
                 break
             end = markers[index+1].start() if index+1 < len(markers) else len(line)
             part = WEEKDAY.sub('', DATE.sub('', line[marker.end():end])).lstrip(' `،,:;-')
-            match = CLOCK.match(part)
-            if match is None and part.strip() and not re.search(r'(?:برای|جهت)\s+ناهار', part):
+            # Filler words carry no clock, so they are removed before the clock is read:
+            # otherwise `ورود ساعت 0900` reads as "no clock" and the whole note is dropped.
+            part = CLOCK_FILLER.sub('', part).lstrip(' `،,:;-')
+            match = CLOCK.search(part) if part else None
+            # Prose after the marker is normal: `خروج میزنم` states an exit whose clock the
+            # user never gave. That note is kept and flagged for review, not dropped -- and a
+            # clockless note is never turned into a guessed one.
+            prose = CLOCK_FILLER.sub('', CLOCK.sub('', part)).strip(' `،,:;-' 'و')
+            is_prose = bool(re.search(r'میزنم|میزنیم|می‌زنم|کردم|شد', part))
+            if match is None and prose and not is_prose \
+                    and not re.search(r'(?:برای|جهت)\s+ناهار', part):
                 del events[line_event_start:]
                 break
             if index+1 < len(markers) and match and part[match.end():].strip(' `،,:;-') not in ('', 'و'):
@@ -160,16 +194,10 @@ def parse_post(post):
                 issues.append('invalid_time')
             range_day, range_basis = day, basis
             warnings = []
-            if basis == 'post_date_assumed' and work_context and start and end and start != end:
-                completed = datetime.fromisoformat(local.isoformat()+'T'+end).replace(tzinfo=TEHRAN)
-                morning_overnight = start > end and posted.astimezone(TEHRAN).hour < 12
-                if completed <= posted and (start < end or morning_overnight):
-                    issues = [r for r in issues if r != 'post_date_assumed']
-                    range_basis = 'posted_clock_inferred'
-                    if morning_overnight:
-                        range_day = local - timedelta(days=1)
-                        range_basis = 'posted_clock_overnight_inferred'
-                    warnings.append('inferred_date_from_completed_range')
+            # A range whose day the text never stated is left undated. Guessing it from the
+            # posting instant (a shift that finished before the note was sent, read as "this
+            # must have been yesterday") is how a night shift gets filed under the wrong day,
+            # and it changes answer with the machine's timezone.
             ranges.append(dict(range_id=f"{post['id']}:range:{len(ranges)}", post_id=post['id'],
                 source_version=post.get('edit_at', 0), raw_text=raw_line,
                 source_span={'line_index': line_index, 'start': 0, 'end': len(raw_line)},

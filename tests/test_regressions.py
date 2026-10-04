@@ -1,8 +1,21 @@
 """Independent correctness regressions using synthetic attendance evidence."""
 from datetime import datetime
 import pytest
-from test_parser import post
+from test_parser import dated
+from test_parser import post as _post
 from attendance_sync.report import build_report, render_html
+
+
+def post(text, stamp='2026-09-08T08:00:00+00:00', ident='p'):
+    """A message that names a day, the way the regressions here all assume.
+
+    Every fixture in this file is about how a *dated* note is handled -- an entry that must
+    not be closed by prose, a day that must be blocked while an exit is unresolved, two days in
+    one message. A bare weekday used to be enough to name the day, off the posting clock; it is
+    not any more, so the date the weekday stands for is written in here. Where a regression
+    genuinely needs an undated note it calls `_post` directly, which keeps that visible.
+    """
+    return _post(dated(text), stamp, ident)
 
 
 def report_for(rows, start='2026-09-12T00:00:00+03:30', end='2026-09-13T23:59:00+03:30'):
@@ -23,11 +36,13 @@ def test_multimarker_prose_cannot_close_genuine_entry(text):
     assert not any(e.get('paired_entry_id') for e in report['events'])
 
 
-@pytest.mark.parametrize('text', ['شنبه ورود 0800 خروج', 'شنبه ورود 0800'])
+# Each fixture writes its own date in, because that is what the parser reads to decide a day.
+# The raw text is asserted on unchanged below, so a date cannot be added afterwards.
+@pytest.mark.parametrize('text', ['شنبه 14050621 ورود 0800 خروج', 'شنبه 14050621 ورود 0800'])
 @pytest.mark.parametrize('context', [False, True])
 def test_unresolved_attendance_blocks_known_day_with_provenance(text, context):
     from copy import deepcopy
-    rows = [post(text, '2026-09-12T12:00:00+03:30', 'a'),
+    rows = [_post(text, '2026-09-12T12:00:00+03:30', 'a'),
             post('شنبه کار 1300-2300', '2026-09-12T23:00:00+03:30', 'b')]
     before = deepcopy(rows)
     report = report_for(rows, start='2026-09-12T13:00:00+03:30' if context else '2026-09-12T00:00:00+03:30')
@@ -36,6 +51,9 @@ def test_unresolved_attendance_blocks_known_day_with_provenance(text, context):
     assert blocker['local_date'] == '2026-09-12'
     assert blocker['reasons']
     evidence = report['context_events'] if context else report['events']
+    # The message is stored exactly as it was written. The fixture goes in through `_post`
+    # because the point here is provenance -- the raw text must survive untouched -- and
+    # `dated` would have rewritten it.
     assert next(e for e in evidence if e['event_id'] == 'a:0')['raw_text'] == text
     unresolved = next(i for i in report['intervals'] + report['context_intervals'] if 'a:0' in i['source_ids'])
     assert unresolved['accounting_days'] == ['2026-09-12']
@@ -43,20 +61,72 @@ def test_unresolved_attendance_blocks_known_day_with_provenance(text, context):
     assert rows == before
 
 
-@pytest.mark.parametrize('text,days', [
-    ('یکشنبه 14050621 ورود 0800', ['2026-09-12', '2026-09-13']),
-    ('شنبه یکشنبه ورود 0800', ['2026-09-12', '2026-09-13']),
-    ('14050621 14050622 کار 0800-0900', ['2026-09-12', '2026-09-13']),
+# A weekday that disagrees with the date beside it is not a problem on its own. One of the two
+# is a slip, and the days written either side of the note say which: a channel of attendance
+# notes runs forwards, so the reading that lands in its proper place between its neighbours is
+# the one that holds. `یکشنبه 14050621` names Sunday but the date is a Saturday; with a day
+# stated after it, the date stands and the note is filed on that single day -- not held open on
+# both readings. What the disagreement cost is recorded, so a reader still sees it.
+@pytest.mark.parametrize('text,day', [
+    ('یکشنبه 14050621 ورود 0800', '2026-09-12'),
+    ('یکشنبه 14050621 کار 0800-0900', '2026-09-12'),
 ])
-def test_ambiguous_dates_block_all_candidate_days(text, days):
+def test_a_weekday_the_neighbourhood_settles_leaves_one_day(text, day):
     report = report_for([
-        post(text, '2026-09-13T12:00:00+03:30', 'a'),
-        post('یکشنبه کار 1300-2300', '2026-09-13T23:00:00+03:30', 'b'),
-    ], start='2026-09-13T13:00:00+03:30')
-    assert report['segments'] == []
-    item = report['context_intervals'][0]
-    assert item['accounting_days'] == days
-    assert report['allocation_blockers'][0]['local_date'] == '2026-09-13'
+        post(text, '2026-09-12T12:00:00+03:30', 'a'),
+        # A day named after the one in dispute, so the weekday still has a second reading in
+        # the channel -- but the channel has moved past it, which is what rules it out.
+        post('دوشنبه 14050623 کار 1300-2300', '2026-09-13T23:00:00+03:30', 'b'),
+    ], start='2026-09-12T00:00:00+03:30')
+    # A note can be an entry or a worked range depending on what it says, and both settle
+    # their day the same way, so the test reads whichever this one turned out to be.
+    entry = next(item for item in report['events'] + report['ranges'] + report['context_ranges']
+                 if item.get('post_id') == 'a')
+    assert entry['date'] == day
+    assert 'weekday_date_conflict' not in entry['reasons']
+    assert any('disagreed' in note for note in entry.get('information', ()))
+    # The day is settled, not held open: the note is filed on one day, and the days it could
+    # have meant are kept beside it as evidence rather than as a block on which day it is.
+    identifier = entry.get('event_id') or entry.get('range_id')
+    held = next(i for i in report['intervals'] + report['context_intervals']
+                if identifier in i['source_ids'])
+    assert day in held['accounting_days']
+    assert entry.get('candidate_dates'), 'the readings weighed are kept on the note'
+
+
+def test_two_weekdays_still_asks_because_neither_is_the_slip():
+    """`شنبه یکشنبه ورود 0800` names two weekdays, so the neighbourhood cannot say which was
+    meant -- there is no single word to be the typo. The note stays a question for the user."""
+    report = report_for([
+        post('شنبه یکشنبه ورود 0800', '2026-09-12T12:00:00+03:30', 'a'),
+        post('یکشنبه 14050622 کار 1300-2300', '2026-09-12T23:00:00+03:30', 'b'),
+    ], start='2026-09-12T00:00:00+03:30')
+    entry = next(e for e in report['events'] + report['context_events']
+                 if e['post_id'] == 'a')
+    assert entry['status'] == 'review'
+    assert 'multiple_weekdays' in entry['reasons']
+
+
+def test_a_weekday_disagreement_the_neighbourhood_cannot_settle_still_asks():
+    """A note the channel cannot correct stays a question, and holds every reading it could mean.
+
+    `یکشنبه 14050621 ورود 0800` reads a day that comes before the Sunday named beside it. The
+    channel states the 12th and the 13th and no more, so the note cannot sit on the 6th -- but
+    both the 12th and the 13th stay open, because sharing a day with the next note is ordinary
+    and not a contradiction. Neither reading is singled out, so the conflict stands and the day
+    is held against both rather than one guessed.
+    """
+    report = report_for([
+        _post('یکشنبه 14050621 ورود 0800', '2026-09-12T12:00:00+03:30', 'a'),
+        _post('یکشنبه 14050622 کار 1300-2300', '2026-09-12T23:00:00+03:30', 'b'),
+    ], start='2026-09-12T00:00:00+03:30')
+    entry = next(e for e in report['events'] + report['context_events']
+                 if e['event_id'] == 'a:0')
+    assert 'weekday_date_conflict' in entry['reasons']
+    assert entry['status'] == 'review'
+    held = next(i for i in report['intervals'] + report['context_intervals']
+                if 'a:0' in i['source_ids'])
+    assert held['accounting_days'] == ['2026-09-12', '2026-09-13']
 
 
 @pytest.mark.parametrize('text', ['> شنبه ورود 0800', 'شنبه خروج برای ناهار 1200', '`شنبه ورود 0800`'])
@@ -125,7 +195,9 @@ def test_artifact_verifier_accounts_for_withheld_duration(tmp_path, tamper):
 
 def test_raw_context_retains_original_weekday_typography():
     from attendance_sync.parser import parse_post
-    event = parse_post(post('دو\u200cشنبه ۱۴۰۵۰۶۲۳\nورود 0800', '2026-09-14T08:00:00+03:30'))[0][0]
+    # Through `_post`: the point here is that the message survives exactly as written, and
+    # `dated` would have rewritten the weekday to add a date the author never typed.
+    event = parse_post(_post('دو\u200cشنبه ۱۴۰۵۰۶۲۳\nورود 0800', '2026-09-14T08:00:00+03:30'))[0][0]
     assert event['raw_weekday'] == 'دو\u200cشنبه'
     assert event['raw_context'] == ['دو\u200cشنبه ۱۴۰۵۰۶۲۳']
     assert event['date'] == '2026-09-14'
@@ -236,12 +308,22 @@ def test_nonattendance_does_not_consume_open_entry(middle):
 
 @pytest.mark.parametrize('excluded', ['> شنبه 14050621', '```\nشنبه 14050621\n```'])
 def test_quoted_context_cannot_redate_active_attendance(excluded):
+    """A date inside a quotation or a code fence is quoted text, not an attendance note.
+
+    The point of the test is that `شنبه 14050621` -- the Saturday -- cannot date the note below
+    it. The note itself says `دو شنبه` and writes no date, and a quoted Saturday is not a
+    channel that ever worked a Saturday, so the only thing the channel can say is that the day
+    is not known. It is held for review rather than dated from the posting clock, which is the
+    reading that used to make a bot on a New York clock file an Iranian Monday as a Sunday.
+    """
     raw = excluded + '\nدو شنبه ورود 0800 خروج 1700'
     report = report_for([post(raw, '2026-09-14T17:00:00+03:30')], end='2026-09-14T18:00:00+03:30')
-    assert all(e['date'] == '2026-09-14' for e in report['events'])
     assert all(e['raw_date'] is None for e in report['events'])
     assert all(e['raw_weekday'] == 'دو شنبه' for e in report['events'])
     assert all(e['raw_context'] == ['دو شنبه ورود 0800 خروج 1700'] for e in report['events'])
+    # No day is invented from the clock: the note names a weekday and nothing states which one.
+    assert all(e['status'] == 'review' for e in report['events'])
+    assert all('weekday_without_stated_day' in e['reasons'] for e in report['events'])
 
 
 def test_multiple_active_weekdays_require_review():

@@ -34,7 +34,7 @@ def build_report(posts, own_id, start, end, *, corrections=None, as_of=None):
                 ignored.append({'post_id':post['id'], 'reason':label})
             if post['user_id'] == own_id:
                 labels.append({'post_id':post['id'], 'source_version':post.get('edit_at',0), 'proposed_label':label, 'confirmed_label':None})
-    paired = pair(events)
+    paired = pair(events, ranges)
     annotate_date_context(paired, ranges)
     for event in paired:
         event['submission_eligible'] = False

@@ -5,8 +5,21 @@ first (earlier) entry". A pairing that is not determined by clock and order (a m
 invalid clock, a date conflict) must never become ready, and a day that holds exactly one
 clock must still be visible as an unresolved remainder instead of disappearing.
 """
-from test_parser import post
+from test_parser import dated
+from test_parser import post as _post
 from test_pairing import events
+
+
+def post(text, stamp='2026-09-08T08:00:00+00:00', ident='p'):
+    """A message that names a day, the way the fixtures in this file all assume.
+
+    A bare weekday used to be enough to name the day, read off the posting clock and therefore
+    dependent on the machine's timezone. It is not any more: only a date written in the message
+    decides the day. `dated` writes in the date each fixture's weekday stands for, so these
+    tests assert on a real day. A fixture that genuinely needs an undated note calls `_post`.
+    """
+    return _post(dated(text), stamp, ident)
+
 
 
 def test_entry_without_a_clock_keeps_its_pair_in_review():
@@ -47,9 +60,9 @@ def test_review_pair_never_becomes_a_ready_interval_with_a_missing_start():
 
 def test_single_exit_day_produces_a_visible_unresolved_remainder():
     from attendance_sync.pairing import pair
-    result = pair(events('خروج دوشنبه 1700'))
+    result = pair(events('دوشنبه 14050623 خروج 1700'))
     event = result[0]
-    assert event['date'] is None and event['source_date'] == '2026-09-07'
+    assert event['date'] is None and event['source_date'] == '2026-09-14'
     assert event['status'] == 'review'
     assert set(event['reasons']) >= {'unpaired_exit', 'incomplete_day'}
     assert event['missing_counterpart_id'] is None
@@ -57,7 +70,7 @@ def test_single_exit_day_produces_a_visible_unresolved_remainder():
 
 def test_single_entry_day_produces_a_visible_unresolved_remainder():
     from attendance_sync.pairing import pair
-    result = pair(events('شنبه ورود 0800'))
+    result = pair(events('شنبه 14050621 ورود 0800'))
     entry = result[0]
     assert entry['pairing_state'] == 'incomplete_day'
     assert set(entry['reasons']) >= {'unmatched_entry', 'unmatched_event'}
@@ -67,26 +80,26 @@ def test_single_entry_day_produces_a_visible_unresolved_remainder():
 def test_incomplete_day_remainder_keeps_its_source_ids_and_allocation_blocked():
     from attendance_sync.intervals import build_intervals
     from attendance_sync.pairing import pair
-    paired = pair(events('خروج دوشنبه 1700'))
+    paired = pair(events('دوشنبه 14050623 خروج 1700'))
     items = build_intervals(paired, [])
     remainder = items[0]
     assert remainder['status'] == 'review'
     assert remainder['start_at'] is None and remainder['end_at'] is None
     assert remainder['source_ids'] == [paired[0]['event_id']]
-    assert remainder['accounting_days'] == ['2026-09-07']
+    assert remainder['accounting_days'] == ['2026-09-14']
     assert set(remainder['reasons']) >= {'unpaired_exit', 'incomplete_day'}
 
 
 def test_a_full_pair_is_still_exactly_one_ready_interval():
     from attendance_sync.intervals import build_intervals
     from attendance_sync.pairing import pair
-    paired = pair(events('شنبه ورود 0800 خروج 1700'))
+    paired = pair(events('شنبه 14050621 ورود 0800 خروج 1700'))
     items = build_intervals(paired, [])
     assert len(items) == 1
     assert items[0]['status'] == 'ready'
-    assert items[0]['start_at'] == '2026-09-05T08:00:00+03:30'
-    assert items[0]['end_at'] == '2026-09-05T17:00:00+03:30'
-    assert items[0]['accounting_days'] == ['2026-09-05']
+    assert items[0]['start_at'] == '2026-09-12T08:00:00+03:30'
+    assert items[0]['end_at'] == '2026-09-12T17:00:00+03:30'
+    assert items[0]['accounting_days'] == ['2026-09-12']
     assert 'incomplete_day' not in items[0]['reasons']
     assert paired[0]['missing_counterpart_id'] is None
 
@@ -117,9 +130,9 @@ def test_a_pair_spanning_midnight_still_splits_and_stays_overnight():
     paired = pair(events('شنبه ورود 2300', 'خروج 0400'))
     items = build_intervals(paired, [])[0]
     assert items['status'] == 'ready' and items['end_day_offset'] == 1
-    assert items['accounting_days'] == ['2026-09-05', '2026-09-06']
-    assert items['start_at'] == '2026-09-05T23:00:00+03:30'
-    assert items['end_at'] == '2026-09-06T04:00:00+03:30'
+    assert items['accounting_days'] == ['2026-09-12', '2026-09-13']
+    assert items['start_at'] == '2026-09-12T23:00:00+03:30'
+    assert items['end_at'] == '2026-09-13T04:00:00+03:30'
 
 
 def test_an_entry_after_an_exit_becomes_overtime_and_stays_ready():

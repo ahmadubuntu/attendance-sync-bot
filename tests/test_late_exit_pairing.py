@@ -64,13 +64,22 @@ def test_exit_written_inside_the_next_morning_note_is_still_todays_exit():
     assert result['out:17:15']['source_date'] == '2026-09-15'
 
 
-def test_an_exit_dated_the_next_day_with_an_earlier_clock_reports_a_conflict():
-    """When the clocks cannot fit the named day, the exit is flagged rather than re-dated."""
+def test_an_exit_dated_the_next_day_with_an_earlier_clock_is_left_unresolved():
+    """Twenty hours between the clocks: no single day holds this shift, so no day is chosen.
+
+    `دوشنبه 14050623 ورود 0830` is 14 September at 08:30 and `سه شنبه 14050624 خروج 0500` is
+    the 15th at 05:00. On the day named that is twenty and a half hours; on the entry's day it
+    is twenty-nine. Neither is a shift, so neither day is picked and both notes go to review.
+    The exit is not re-dated to the entry's day, because doing so would invent a day worked
+    that nobody wrote.
+    """
     events = (post('m0', 'دوشنبه 14050623\nورود 0830', '2026-09-14T09:00:00+03:30')
               + post('m1', 'سه شنبه 14050624 خروج 0500', '2026-09-15T05:00:00+03:30'))
     result = paired(events)
-    assert result['out:05:00']['date'] == result['in:08:30']['date'] or \
-        'explicit_exit_date_conflict' in result['out:05:00']['reasons']
+    assert result['out:05:00']['date'] is None
+    assert result['out:05:00']['status'] == 'review'
+    assert result['out:05:00']['source_date'] == '2026-09-15', 'the day written stays as evidence'
+    assert 'unmatched_entry' in result['in:08:30']['reasons']
 
 
 def test_exit_without_a_named_day_on_the_next_morning_closes_yesterdays_entry():
@@ -88,17 +97,20 @@ def test_exit_without_a_named_day_on_the_next_morning_closes_yesterdays_entry():
     assert result['out:17:10']['status'] == 'ready'
 
 
-def test_a_named_day_on_the_exit_is_recorded_while_the_pairing_stays_on_the_open_entry():
-    """A weekday on the exit is kept as evidence, and the mismatch is reported, not resolved.
+def test_a_weekday_naming_another_day_loses_to_the_open_entry():
+    """A weekday on the exit is kept as evidence, and the mismatch is reported, not hidden.
 
-    The exit still closes the open entry (that is the confirmed rule), but the day it names is
-    preserved so the discrepancy is visible instead of silently overwritten.
+    `خروج سه شنبه 1710` says Tuesday and the open entry is Monday the 14th. The confirmed
+    rule is that an undated exit closes the last entry before it, so Monday's day stands and
+    Tuesday is recorded as what the note said. Both flags are kept so the disagreement is
+    visible in the report rather than silently overwritten -- the exit still goes to review.
     """
     events = (post('m0', 'دوشنبه 14050623\nورود 0830', '2026-09-14T09:00:00+03:30')
               + post('m1', 'خروج سه شنبه 1710', '2026-09-15T07:59:00+03:30'))
     result = paired(events)
-    assert result['out:17:10']['source_date'] == '2026-09-15'
-    assert result['out:17:10']['date'] == '2026-09-14'
+    assert result['out:17:10']['date'] == '2026-09-14', 'the open entry took it'
+    assert result['out:17:10']['status'] == 'review', 'the disagreement is reported'
+    assert 'exit_weekday_conflicts_with_entry' in result['out:17:10']['reasons']
     assert 'exit_weekday_overridden_by_pairing' in result['out:17:10']['reasons']
     assert result['in:08:30']['paired_exit_id'] == result['out:17:10']['event_id']
 
@@ -111,12 +123,23 @@ def test_an_exit_without_any_entry_is_reported_instead_of_dated():
     assert result['out:17:10']['pairing_state'] == 'incomplete_day'
 
 
-def test_explicit_date_that_contradicts_the_pairing_still_requires_review():
+def test_an_exit_whose_clocks_sit_before_its_entry_is_not_a_late_note():
+    """A note that names a day but clocks before the entry cannot be a note written late.
+
+    `دوشنبه 14050623 / ورود 0830` is the 14th at 08:30, and `چهارشنبه 14050626 / خروج 0500`
+    names the 18th at five in the morning. On the day the exit named that reads as four days and
+    twenty hours; on the entry's own day it would wrap to read as twenty and a half, which is
+    also impossible. Neither reading is one shift, so the exit is not that entry's exit -- the
+    note claims a day the channel cannot back, and both the claim and the refusal are kept.
+    """
     events = (post('m1', 'دوشنبه 14050623\nورود 0830', '2026-09-14T09:00:00+03:30')
-              + post('m2', 'چهارشنبه 14050625 خروج 0500', '2026-09-16T05:00:00+03:30'))
+              + post('m2', 'پنجشنبه 14050627 خروج 0500', '2026-09-18T05:00:00+03:30'))
     result = paired(events)
-    assert 'explicit_exit_date_conflict' in result['out:05:00']['reasons']
-    assert result['out:05:00']['status'] == 'review'
+    exit_event = result['out:05:00']
+    assert exit_event['date'] is None, 'an impossible pair was filed on a day anyway'
+    assert 'no_entry_on_the_named_day' in exit_event['reasons']
+    assert exit_event['status'] == 'review'
+    assert 'unmatched_entry' in result['in:08:30']['reasons']
 
 
 def test_a_weekday_named_on_the_exit_that_matches_the_entry_is_clean():

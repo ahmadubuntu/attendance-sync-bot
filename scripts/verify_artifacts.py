@@ -6,7 +6,8 @@ from pathlib import Path
 import stat
 import sys
 
-sys.path.insert(0, str(Path('src')))
+# Absolute: the caller may run this from any cwd (the tests run it from a tmp dir).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 from attendance_sync.intervals import split_midnights  # noqa: E402
 
 for stem in ('review', 'rolling-review'):

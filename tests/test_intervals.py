@@ -21,7 +21,12 @@ def test_overnight_interval_and_midnight_split():
 
 def test_event_overtime_survives_midnight_and_next_day_entry_regular():
     from attendance_sync.intervals import build_intervals
-    data = pair(events('شنبه ورود 2300 اضافه کاری', 'خروج 0400', 'یکشنبه ورود 0800 خروج 1600'))
+    # The days are named outright: the second note closes the first day's shift across
+    # midnight, and the next day is separate work with its own quota. Both days are stated in
+    # the messages, because a weekday on its own does not name a day.
+    data = pair(events('شنبه 14050621 ورود 2300 اضافه کاری',
+                       'خروج 0400',
+                       'یکشنبه 14050622 ورود 0800 خروج 1600'))
     items = build_intervals(data, [])
     assert items[0]['explicit_overtime']
     assert not items[1]['explicit_overtime']
@@ -43,7 +48,7 @@ def test_return_gaps_and_pairs_retained():
 
 def test_equal_clocks_review():
     from attendance_sync.intervals import build_intervals
-    _, ranges = parse_post(post('شنبه کار 0400-0400'))
+    _, ranges = parse_post(post('شنبه 14050621 کار 0400-0400'))
     item = build_intervals([], ranges)[0]
     assert item['status'] == 'review'
     assert 'ambiguous_duration' in item['reasons']
@@ -51,8 +56,8 @@ def test_equal_clocks_review():
 
 def test_exact_duplicate_merges_and_overlap_blocks():
     from attendance_sync.intervals import build_intervals
-    data = pair(events('شنبه ورود 0800 خروج 1200'))
-    _, ranges = parse_post(post('شنبه کار 0800-1200\nکار 1100-1300'))
+    data = pair(events('شنبه 14050621 ورود 0800 خروج 1200'))
+    _, ranges = parse_post(post('شنبه 14050621 کار 0800-1200\nکار 1100-1300'))
     items = build_intervals(data, ranges)
     assert len(items) == 2
     assert len(items[0]['source_ids']) == 3

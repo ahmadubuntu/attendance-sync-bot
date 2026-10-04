@@ -1,7 +1,20 @@
 from datetime import datetime, timezone
 import json
 import stat
-from test_parser import post
+from test_parser import dated
+from test_parser import post as _post
+
+
+def post(text, stamp='2026-09-08T08:00:00+00:00', ident='p'):
+    """A message that names a day, the way the fixtures in this file all assume.
+
+    A bare weekday used to be enough to name the day, read off the posting clock and therefore
+    dependent on the machine's timezone. It is not any more: only a date written in the message
+    decides the day. `dated` writes in the date each fixture's weekday stands for, so these
+    tests assert on a real day. A fixture that genuinely needs an undated note calls `_post`.
+    """
+    return _post(dated(text), stamp, ident)
+
 
 
 def test_report_pipeline_context_privacy_counts_and_permissions(tmp_path):

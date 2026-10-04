@@ -1,6 +1,46 @@
 from datetime import datetime
 import pytest
 
+# The days the test fixtures are written against. A bare weekday does not name a day any more
+# -- only a date written in the message does, so a test that wants a day has to say which one.
+# `dated` puts that date beside the weekday for the tests that are about something else, and
+# leaves alone the tests that are specifically about a note with no date in it.
+WEEKDAY_DATES = {
+    'شنبه': '14050621',        # 12 September 2026, a Saturday
+    'یکشنبه': '14050622',
+    'دوشنبه': '14050623',
+    'سه شنبه': '14050624',
+    'چهارشنبه': '14050625',
+    'پنجشنبه': '14050626',
+    'جمعه': '14050627',
+}
+
+
+def dated(text):
+    """Write the date a fixture's weekday names beside the weekday, once per message.
+
+    `شنبه ورود 0800` becomes `شنبه 14050621 ورود 0800`. A message that already states a date is
+    left exactly as written.
+
+    A message that names only a weekday and no clock direction is also left alone: `خروج شنبه
+    1800` is deliberately undated, because the rule under test is that an exit the text gave no
+    day for takes the day of the entry it closes. Writing a date in would erase the case.
+    """
+    from attendance_sync.parser import DATE
+    head = text.splitlines()[0] if text.strip() else ''
+    if DATE.search(head):
+        return text
+    if 'خروج' in head and 'ورود' not in head:
+        return text
+    # Longest name first. `شنبه` is a substring of `یکشنبه`, so matching in declaration order
+    # would find the Saturday inside the Sunday and write Saturday's date into a Sunday note --
+    # a fixture that quietly asserts the wrong day, and tests that pass for the wrong reason.
+    for word in sorted(WEEKDAY_DATES, key=len, reverse=True):
+        if word in head:
+            day = WEEKDAY_DATES[word]
+            return '\n'.join([head.replace(word, f'{word} {day}', 1), *text.splitlines()[1:]])
+    return text
+
 
 def post(text, stamp='2026-09-08T08:00:00+00:00', ident='p'):
     return dict(id=ident, user_id='self', message=text, create_at=int(datetime.fromisoformat(stamp).timestamp()*1000), edit_at=0, delete_at=0, type='')
@@ -14,7 +54,12 @@ def test_explicit_date_conflict_preserves_evidence():
     assert event['raw_text'] == 'ورود ۰۷۲۰'
     assert event['raw_date'] == '14050616'
     assert event['date'] == '2026-09-07'
-    assert event['suggested_date'] == '2026-09-08'
+    # The date written in the note is the only date the parser may offer. `suggested_date` used
+    # to carry the day the note happened to be posted, which meant the same message named a
+    # different attendance day depending on the clock of the machine reading the channel -- the
+    # Sunday worked in Iran came out as Saturday for a bot running on an American clock. There
+    # is nothing to suggest from text that names no second day.
+    assert event.get('suggested_date') is None
     assert event['time'] == '07:20'
     assert event['status'] == 'review'
     assert 'weekday_date_conflict' in event['reasons']
